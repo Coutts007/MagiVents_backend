@@ -1,0 +1,18 @@
+# /magivents/.gitignore
+
+# Environments
+.env
+__pycache__/
+*.pyc
+
+# Docker volumes
+postgres_data/
+redis_data/
+
+# Django
+backend/db.sqlite3
+backend/media/
+backend/static/
+
+venv/
+.~lock.*

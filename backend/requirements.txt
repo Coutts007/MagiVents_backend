@@ -1,0 +1,4 @@
+Django>=5.0
+psycopg2-binary>=2.9     # PostgreSQL database adapter
+redis>=5.0               # Redis client for locking and caching
+djangorestframework>=3.14
