@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'corsheaders', # <-- Added this for handling Cross-Origin Resource Sharing (CORS)
     'rest_framework',                  # <-- Added this for Django REST Framework
     'rest_framework_simplejwt',        # <-- Added this for JWT authentication
     'drf_spectacular',  # <-- Add this for API schema generation and documentation
@@ -48,6 +49,7 @@ AUTH_USER_MODEL = 'events.User'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',  # <-- Added this for handling CORS
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -175,3 +177,12 @@ SPECTACULAR_SETTINGS = {
     # This automatically adds the JWT bearer token field to the Swagger UI
     'COMPONENT_SPLIT_REQUEST': True,
 }
+
+# CORS Configuration
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",  # Default port for Vite (React/TypeScript)
+    "http://localhost:3000",  # Default port for Create React App
+]
+
+# Allow credentials (like cookies or authorization headers) to be sent cross-origin
+CORS_ALLOW_CREDENTIALS = True
