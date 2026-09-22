@@ -38,13 +38,16 @@ class Event(models.Model):
     start_time = models.DateTimeField()
     end_time = models.DateTimeField()
     status = models.CharField(max_length=20, choices=EventStatus.choices, default=EventStatus.DRAFT)
+
+    # Add a field for the event's floor plan image
+    floor_plan = models.ImageField(upload_to='floor_plans/', null=True, blank=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.title
-
+    
 
 # Ticketing and Order Models
 

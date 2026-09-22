@@ -145,6 +145,14 @@ STATIC_URL = 'static/'
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
+import os
+
+# Base url to serve media files
+MEDIA_URL = '/media/'
+
+# Path where media is stored on the server machine
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
@@ -157,6 +165,12 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     ),
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',  # <-- Added this for API schema generation
+    
+    #'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    #'PAGE_SIZE': 10,  # The default number of items to return per page
+
+    'DEFAULT_PAGINATION_CLASS': 'events.pagination.StandardResultsSetPagination',
+    # 'PAGE_SIZE' is now handled inside the custom class
 }
 
 from datetime import timedelta
