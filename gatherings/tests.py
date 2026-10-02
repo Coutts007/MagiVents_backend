@@ -68,3 +68,36 @@ class GatheringApiTests(APITestCase):
 
         self.assertEqual(self.client.delete(f'/api/gatherings/{gid}/').status_code, 204)
         self.assertFalse(Gathering.objects.exists())
+
+    def test_kes_free_events_categories_and_created_at(self):
+        call_command('seed_gatherings', verbosity=0)
+        self.client.force_authenticate(self.owner)
+
+        # Paid events need a price above 0
+        paid = event_payload(isFree=False)
+        paid['pricing'] = {**paid['pricing'], 'startingPrice': 0}
+        self.assertEqual(self.client.post('/api/gatherings/', paid, format='json').status_code, 400)
+
+        # Free events have every price forced to 0, in KES
+        free = event_payload(isFree=True, agenda=[])
+        res = self.client.post('/api/gatherings/', free, format='json')
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertTrue(res.data['isFree'])
+        self.assertEqual(res.data['pricing']['currency'], 'KES')
+        self.assertEqual(res.data['pricing']['startingPrice'], 0)
+        self.assertTrue(all(t['price'] == 0 for t in res.data['pricing']['tiers']))
+        self.assertEqual(res.data['agenda'], [])
+        self.assertTrue(res.data['createdAt'])
+
+        # Old categories are no longer accepted; new ones are searchable
+        self.assertEqual(
+            self.client.post('/api/gatherings/', event_payload(category='Culinary & Wine'), format='json').status_code, 400
+        )
+        found = self.client.get('/api/gatherings/', {'search': 'Tech & Innovation'}).data
+        self.assertTrue(found and all(e['category'] == 'Tech & Innovation' for e in found))
+
+    def test_organizer_defined_agenda_is_stored_in_order(self):
+        self.client.force_authenticate(self.owner)
+        agenda = [{'time': '09:00', 'title': 'Opening', 'detail': ''}, {'time': '10:00', 'title': 'Panel', 'detail': 'Q&A'}]
+        res = self.client.post('/api/gatherings/', event_payload(agenda=agenda), format='json')
+        self.assertEqual(res.data['agenda'], agenda)

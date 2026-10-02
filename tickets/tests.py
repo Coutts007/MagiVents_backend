@@ -12,7 +12,7 @@ class BookingAndBookmarkTests(APITestCase):
         call_command('seed_gatherings', verbosity=0)
         self.user = User.objects.create_user(username='u@x.com', email='u@x.com', password='pw-User-123')
         self.client.force_authenticate(self.user)
-        self.event = Gathering.objects.get(id='symphony-in-the-quarry')
+        self.event = Gathering.objects.get(id='nairobi-sounds-live')
         self.tier = self.event.tiers.first()
 
     def book(self, **overrides):
@@ -27,7 +27,7 @@ class BookingAndBookmarkTests(APITestCase):
 
     def test_booking_prices_server_side_and_updates_counts(self):
         attendees, available = self.event.attendee_count, self.tier.available
-        res = self.book(promoCode='magisand')
+        res = self.book(promoCode='karibu15')
         self.assertEqual(res.status_code, 201, res.data)
         expected_base = float(self.tier.price) * 2
         self.assertEqual(res.data['unitPrice'], float(self.tier.price))
@@ -71,3 +71,13 @@ class BookingAndBookmarkTests(APITestCase):
         self.assertEqual(self.client.get('/api/bookmarks/').data, [self.event.id])
         self.assertEqual(self.client.post(url).status_code, 200)
         self.assertEqual(self.client.get('/api/bookmarks/').data, [])
+
+    def test_free_event_booking_needs_no_payment(self):
+        free_event = Gathering.objects.get(id='nairobi-dev-meetup-payments')
+        free_tier = free_event.tiers.first()
+        res = self.book(eventId=free_event.id, tierId=str(free_tier.id), tierName=free_tier.name, quantity=1)
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertEqual(res.data['totalPrice'], 0)
+        self.assertEqual(res.data['paymentMethod'], 'free')
+        self.assertIsNone(res.data['mpesaReceiptNumber'])
+        self.assertEqual(res.data['currency'], 'KES')

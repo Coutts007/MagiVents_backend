@@ -5,8 +5,8 @@ from django.contrib.auth.models import AbstractUser
 
 class User(AbstractUser):
     ROLE_CHOICES = (
-        ('patron', 'Patron of the Arts'),
-        ('curator', 'Host & Curator'),
+        ('patron', 'Attendee'),
+        ('curator', 'Organizer'),
     )
     PROVIDER_CHOICES = (
         ('email', 'Email & Password'),
@@ -30,4 +30,5 @@ class User(AbstractUser):
     def effective_avatar_url(self):
         if self.avatar:
             return self.avatar.url
-        return self.avatar_url or 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80'
+        # Empty means "no photo": the frontend shows the user's initials
+        return self.avatar_url or ''

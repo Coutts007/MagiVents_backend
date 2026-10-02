@@ -9,7 +9,8 @@ class Booking(models.Model):
     PAYMENT_CHOICES = (
         ('mpesa', 'M-Pesa'),
         ('card', 'Credit / Debit Card'),
-        ('complimentary', 'Curator Invitation'),
+        ('complimentary', 'Organizer Invitation'),
+        ('free', 'Free Entry'),
     )
 
     id = models.CharField(primary_key=True, max_length=100, default=uuid.uuid4, editable=False)
@@ -31,7 +32,7 @@ class Booking(models.Model):
     mpesa_receipt_number = models.CharField(max_length=50, blank=True, default='')
     total_in_kes = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     mpesa_mode = models.CharField(max_length=20, blank=True, default='')
-    currency = models.CharField(max_length=10, default='$')
+    currency = models.CharField(max_length=10, default='KES')
     discount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     notes = models.TextField(blank=True, default='')
 

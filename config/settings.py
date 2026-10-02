@@ -106,7 +106,7 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 15 * 1024 * 1024
 
 # Password reset emails are printed to the runserver console in development
 EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
-DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'MagiVents <no-reply@magivents.local>')
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'MagiVents <magiventskenya@gmail.com>')
 
 # Google OAuth Client ID (must match Google Cloud Console)
 GOOGLE_OAUTH_CLIENT_ID = os.environ.get('GOOGLE_OAUTH_CLIENT_ID', '')

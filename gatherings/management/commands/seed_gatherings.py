@@ -13,29 +13,33 @@ SEED_ORGANIZER_EMAIL = 'curator@magivents.local'
 
 
 class Command(BaseCommand):
-    help = 'Load the demo gatherings (exported from the frontend mock data) owned by a seed curator account.'
+    help = 'Load the demo events in fixtures/seed_events.json, owned by a demo organizer account.'
 
     def add_arguments(self, parser):
-        parser.add_argument('--reset', action='store_true', help='Delete and recreate gatherings that already exist.')
+        parser.add_argument(
+            '--reset', action='store_true',
+            help="Delete all of the demo organizer's events (including old demo events) and load the fixture again.",
+        )
 
     @transaction.atomic
     def handle(self, *args, reset=False, **options):
         organizer, created = User.objects.get_or_create(
             email=SEED_ORGANIZER_EMAIL,
-            defaults={'username': SEED_ORGANIZER_EMAIL, 'first_name': 'MagiVents Curators', 'role': 'curator'},
+            defaults={'username': SEED_ORGANIZER_EMAIL, 'first_name': 'MagiVents Demo', 'role': 'curator'},
         )
         if created:
             organizer.set_unusable_password()
             organizer.save()
 
+        if reset:
+            Gathering.objects.filter(organizer=organizer).delete()
+
         added = skipped = 0
         for event in json.loads(FIXTURE.read_text()):
-            existing = Gathering.objects.filter(id=event['id']).first()
-            if existing and not reset:
+            # After a reset this only skips ids now owned by someone else
+            if Gathering.objects.filter(id=event['id']).exists():
                 skipped += 1
                 continue
-            if existing:
-                existing.delete()
 
             serializer = GatheringSerializer(data=event)
             if not serializer.is_valid():

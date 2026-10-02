@@ -8,6 +8,7 @@ from .models import AgendaItem, Gathering, TicketTier
 class TicketTierSerializer(serializers.ModelSerializer):
     # Frontend tier ids are strings; ids it invents for new tiers (e.g. "tier-standard-123") are ignored
     id = serializers.CharField(required=False, allow_blank=True)
+    price = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0)
     perks = serializers.ListField(child=serializers.CharField(), required=False)
 
     class Meta:
@@ -38,8 +39,9 @@ class VenueSerializer(serializers.Serializer):
 
 
 class PricingSerializer(serializers.Serializer):
+    # Accepted for compatibility but ignored: every price is in KES
     currency = serializers.CharField(max_length=10, required=False)
-    startingPrice = serializers.DecimalField(max_digits=10, decimal_places=2)
+    startingPrice = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0)
     tiers = TicketTierSerializer(many=True, required=False)
 
 
@@ -57,12 +59,13 @@ class GatheringSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=255)
     subtitle = serializers.CharField(max_length=300, required=False, allow_blank=True)
     category = serializers.ChoiceField(choices=Gathering.CATEGORY_CHOICES)
-    description = serializers.CharField()
+    description = serializers.CharField(required=False, allow_blank=True)
     fullContent = serializers.CharField(source='full_content', required=False, allow_blank=True)
     date = serializers.CharField(source='date_display', max_length=120)
     isoDate = serializers.DateField(source='iso_date')
     time = serializers.CharField(source='time_display', max_length=120)
     venue = VenueSerializer()
+    isFree = serializers.BooleanField(source='is_free', required=False)
     pricing = PricingSerializer()
     capacity = serializers.IntegerField(min_value=1)
     attendeeCount = serializers.IntegerField(source='attendee_count', read_only=True)
@@ -73,6 +76,31 @@ class GatheringSerializer(serializers.Serializer):
     isFeatured = serializers.BooleanField(source='is_featured', required=False)
     tags = serializers.ListField(child=serializers.CharField(), required=False)
     curatorNote = serializers.CharField(source='curator_note', required=False, allow_blank=True)
+    createdAt = serializers.DateTimeField(source='created_at', read_only=True)
+
+    def validate(self, attrs):
+        is_free = attrs.get('is_free', getattr(self.instance, 'is_free', False))
+        pricing = attrs.get('pricing')
+        if pricing is not None:
+            if is_free:
+                # Free events cost nothing at every tier
+                pricing['startingPrice'] = 0
+                for tier in pricing.get('tiers', []):
+                    tier['price'] = 0
+            elif pricing['startingPrice'] <= 0:
+                raise serializers.ValidationError(
+                    {'pricing': 'Enter a ticket price above KSh 0, or mark the event as free.'}
+                )
+        elif is_free and self.instance is not None:
+            # Switching an existing event to free without resending pricing
+            attrs['pricing'] = {'startingPrice': 0, 'tiers': [
+                {'id': str(t.id), 'name': t.name, 'price': 0, 'description': t.description,
+                 'available': t.available, 'perks': t.perks}
+                for t in self.instance.tiers.all()
+            ]}
+        elif 'is_free' in attrs and not is_free and self.instance is not None and self.instance.starting_price <= 0:
+            raise serializers.ValidationError({'pricing': 'Set a ticket price when an event stops being free.'})
+        return attrs
 
     def _image_url(self, obj):
         if obj.artwork_image:
@@ -102,6 +130,7 @@ class GatheringSerializer(serializers.Serializer):
                     if obj.venue_lat is not None and obj.venue_lng is not None else None
                 ),
             },
+            'isFree': obj.is_free,
             'pricing': {
                 'currency': obj.currency,
                 'startingPrice': float(obj.starting_price),
@@ -134,6 +163,7 @@ class GatheringSerializer(serializers.Serializer):
             'isFeatured': obj.is_featured,
             'tags': obj.tags,
             'curatorNote': obj.curator_note,
+            'createdAt': obj.created_at.isoformat() if obj.created_at else None,
         }
 
     # --- writing -------------------------------------------------------------
@@ -161,7 +191,7 @@ class GatheringSerializer(serializers.Serializer):
 
         if pricing is not None:
             instance.starting_price = pricing['startingPrice']
-            instance.currency = pricing.get('currency') or instance.currency
+            instance.currency = 'KES'
 
         if host is not None:
             instance.host_name = host.get('name', '')

@@ -3,14 +3,18 @@ from django.conf import settings
 from django.db import models
 
 class Gathering(models.Model):
-    CATEGORY_CHOICES = (
-        ('Culinary & Wine', 'Culinary & Wine'),
-        ('Architecture & Design', 'Architecture & Design'),
-        ('Fine Arts & Craft', 'Fine Arts & Craft'),
-        ('Music & Performance', 'Music & Performance'),
-        ('Literature & Thought', 'Literature & Thought'),
-        ('Gatherings & Salons', 'Gatherings & Salons'),
-    )
+    CATEGORIES = [
+        'Sports & Outdoors',
+        'Entertainment & Music',
+        'Business & Entrepreneurship',
+        'Tech & Innovation',
+        'Education & Career',
+        'Arts & Culture',
+        'Social Impact & Community',
+        'Political',
+        'Others',
+    ]
+    CATEGORY_CHOICES = tuple((c, c) for c in CATEGORIES)
     STATUS_CHOICES = (
         ('published', 'Published'),
         ('draft', 'Draft'),
@@ -25,7 +29,7 @@ class Gathering(models.Model):
     description = models.TextField()
     full_content = models.TextField(blank=True, default='')
     
-    date_display = models.CharField(max_length=120)  # e.g., "Saturday, Nov 28, 2026"
+    date_display = models.CharField(max_length=120)  # e.g., "Saturday, 28 Nov 2026"
     iso_date = models.DateField()
     time_display = models.CharField(max_length=120)  # e.g., "19:00 — 22:30"
     
@@ -39,8 +43,10 @@ class Gathering(models.Model):
     venue_lng = models.FloatField(null=True, blank=True)
 
     # Capacity & Pricing
-    starting_price = models.DecimalField(max_digits=10, decimal_places=2, default=50.00)
-    currency = models.CharField(max_length=10, default='$')
+    # All prices are in Kenyan shillings
+    is_free = models.BooleanField(default=False)
+    starting_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    currency = models.CharField(max_length=10, default='KES')
     capacity = models.PositiveIntegerField(default=100)
     attendee_count = models.PositiveIntegerField(default=0)
 
@@ -71,7 +77,7 @@ class Gathering(models.Model):
 
 class TicketTier(models.Model):
     gathering = models.ForeignKey(Gathering, on_delete=models.CASCADE, related_name='tiers')
-    name = models.CharField(max_length=120)  # e.g. "Patron Circle"
+    name = models.CharField(max_length=120)  # e.g. "VIP"
     price = models.DecimalField(max_digits=10, decimal_places=2)
     description = models.TextField(blank=True, default='')
     available = models.PositiveIntegerField(default=50)
@@ -84,7 +90,7 @@ class TicketTier(models.Model):
 class AgendaItem(models.Model):
     gathering = models.ForeignKey(Gathering, on_delete=models.CASCADE, related_name='agenda_items')
     time = models.CharField(max_length=50)   # e.g. "19:00"
-    title = models.CharField(max_length=200) # e.g. "Welcome Aperitif"
+    title = models.CharField(max_length=200) # e.g. "Keynote address"
     detail = models.TextField(blank=True, default='')
     order = models.PositiveIntegerField(default=0)
 

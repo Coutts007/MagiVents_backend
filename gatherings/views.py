@@ -20,7 +20,7 @@ class GatheringViewSet(viewsets.ModelViewSet):
     serializer_class = GatheringSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOrganizerOrReadOnly]
     filter_backends = [filters.SearchFilter]
-    search_fields = ['title', 'subtitle', 'venue_city', 'tags']
+    search_fields = ['title', 'subtitle', 'category', 'venue_name', 'venue_city', 'host_name', 'tags']
 
     def get_queryset(self):
         qs = Gathering.objects.prefetch_related('tiers', 'agenda_items').order_by('iso_date')
@@ -35,7 +35,7 @@ class GatheringViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def my_gatherings(self, request):
-        """Returns gatherings organized by the current curator."""
+        """Returns gatherings organized by the current user."""
         gatherings = self.get_queryset().filter(organizer=request.user)
         serializer = self.get_serializer(gatherings, many=True)
         return Response(serializer.data)

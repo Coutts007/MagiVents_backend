@@ -8,7 +8,7 @@ from gatherings.models import Gathering, TicketTier
 from .models import Booking
 
 # Mirrors the codes accepted by the checkout form in the frontend
-PROMO_CODES = {'MAGISAND': Decimal('0.15'), 'PATRON15': Decimal('0.15')}
+PROMO_CODES = {'KARIBU15': Decimal('0.15')}
 
 
 def generate_ticket_code():
@@ -117,13 +117,23 @@ class BookingSerializer(serializers.ModelSerializer):
         base_total = unit_price * quantity
         discount = (base_total * PROMO_CODES[promo]).quantize(Decimal('1'), ROUND_HALF_UP) if promo else Decimal('0')
 
+        total = max(Decimal('0'), base_total - discount)
+        if total == 0:
+            # Free entry: nothing to pay, so payment details are not kept
+            validated_data.update(
+                payment_method='free', mpesa_phone_number='', mpesa_receipt_number='',
+                mpesa_mode='', total_in_kes=None,
+            )
+        else:
+            validated_data['total_in_kes'] = total
+
         booking = Booking.objects.create(
             user=self.context['request'].user,
             gathering=gathering,
             tier_name=tier_name,
             unit_price=unit_price,
             discount=discount,
-            total_price=max(Decimal('0'), base_total - discount),
+            total_price=total,
             currency=gathering.currency,
             ticket_code=generate_ticket_code(),
             **validated_data,

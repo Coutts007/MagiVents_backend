@@ -20,6 +20,8 @@ class AuthFlowTests(APITestCase):
         self.assertEqual(res.status_code, 201, res.data)
         self.assertEqual(res.data['user']['name'], 'Ada Lovelace')
         self.assertEqual(res.data['user']['email'], 'ada@example.com')
+        # No stock photo: the frontend shows initials until one is uploaded
+        self.assertEqual(res.data['user']['avatarUrl'], '')
         self.assertIn('access', res.data['tokens'])
 
         res = self.client.post('/api/auth/login/', {'email': 'ADA@example.com', 'password': 'Sturdy-pass-42'}, format='json')
