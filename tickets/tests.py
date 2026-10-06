@@ -5,6 +5,7 @@ from rest_framework.test import APITestCase
 
 from accounts.models import User
 from gatherings.models import Gathering
+from tickets.models import Booking
 
 
 class BookingAndBookmarkTests(APITestCase):
@@ -81,3 +82,12 @@ class BookingAndBookmarkTests(APITestCase):
         self.assertEqual(res.data['paymentMethod'], 'free')
         self.assertIsNone(res.data['mpesaReceiptNumber'])
         self.assertEqual(res.data['currency'], 'KES')
+
+    def test_guest_can_book_without_account(self):
+        self.client.force_authenticate(None)
+        res = self.book(attendeeEmail='guest@x.com')
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertTrue(res.data['ticketCode'].startswith('MV-'))
+        self.assertIsNone(Booking.objects.get(id=res.data['id']).user)
+        # Guests still cannot list bookings
+        self.assertEqual(self.client.get('/api/bookings/').status_code, 401)

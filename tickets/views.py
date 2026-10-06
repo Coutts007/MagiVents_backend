@@ -1,5 +1,6 @@
 from rest_framework import mixins, permissions, status, viewsets
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from gatherings.models import Gathering
@@ -11,6 +12,19 @@ class BookingViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixins.Retr
                      viewsets.GenericViewSet):
     serializer_class = BookingSerializer
     permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = 'guest_bookings'
+
+    def get_permissions(self):
+        # Anyone can register for an event; viewing past bookings needs an account
+        if self.action == 'create':
+            return [permissions.AllowAny()]
+        return super().get_permissions()
+
+    def get_throttles(self):
+        # Guest bookings are rate limited per IP; signed-in users are not
+        if self.action == 'create' and not self.request.user.is_authenticated:
+            return [ScopedRateThrottle()]
+        return []
 
     def get_queryset(self):
         # Users can only view their own bookings

@@ -82,6 +82,9 @@ REST_FRAMEWORK = {
     ),
     # Frontend expects prices as numbers, not strings
     'COERCE_DECIMAL_TO_STRING': False,
+    'DEFAULT_THROTTLE_RATES': {
+        'guest_bookings': os.environ.get('GUEST_BOOKING_RATE', '20/hour'),
+    },
 }
 
 SIMPLE_JWT = {

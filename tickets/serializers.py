@@ -127,8 +127,10 @@ class BookingSerializer(serializers.ModelSerializer):
         else:
             validated_data['total_in_kes'] = total
 
+        user = self.context['request'].user
         booking = Booking.objects.create(
-            user=self.context['request'].user,
+            # Guests book without an account; their ticket is tied to the attendee email only
+            user=user if user.is_authenticated else None,
             gathering=gathering,
             tier_name=tier_name,
             unit_price=unit_price,
