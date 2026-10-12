@@ -96,6 +96,9 @@ urlpatterns = [
     path('api/tickets/<uuid:booking_id>/resend/', TicketResendView.as_view(), name='ticket_resend'),
 
     # Gathering & Booking Resources
+    # Staff console: secret path + staff account; anything else is a plain 404
+    path('api/console/', include('console.urls')),
+
     path('api/', include(router.urls)),
 ]
 

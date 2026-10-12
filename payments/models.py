@@ -1,5 +1,6 @@
 import uuid
 
+from django.conf import settings
 from django.db import models
 
 
@@ -35,6 +36,11 @@ class Payment(models.Model):
     failure_reason = models.CharField(max_length=255, blank=True, default='')
     # Paid after the booking had already been confirmed or released: the owner must refund it
     needs_refund = models.BooleanField(default=False)
+    # Set by staff in the console once the money has been returned (or the case closed)
+    refund_resolved_at = models.DateTimeField(null=True, blank=True)
+    refund_resolved_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+                                           blank=True, related_name='+')
+    refund_note = models.TextField(blank=True, default='')
     # Every callback / query result received, newest last
     raw_payloads = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

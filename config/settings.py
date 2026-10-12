@@ -80,6 +80,7 @@ INSTALLED_APPS = [
    'gatherings',
    'tickets',
    'payments',
+   'console',
 
 ]
 
@@ -178,6 +179,13 @@ PAYSTACK_SECRET_KEY = os.environ.get('PAYSTACK_SECRET_KEY', '')
 # Address search for the event map (OpenStreetMap Nominatim by default; respect its usage policy)
 GEOCODER_URL = os.environ.get('GEOCODER_URL', 'https://nominatim.openstreetmap.org/search')
 GEOCODER_USER_AGENT = os.environ.get('GEOCODER_USER_AGENT', 'MagiVents/1.0 (magiventskenya@gmail.com)')
+
+# Staff console: an in-app admin section served only at this secret path (e.g. /<ADMIN_CONSOLE_PATH>) and
+# only to staff accounts. Empty disables it. Use a long random value and never commit it:
+#   python -c "import secrets; print(secrets.token_urlsafe(24))"
+ADMIN_CONSOLE_PATH = os.environ.get('ADMIN_CONSOLE_PATH', '').strip().strip('/')
+# Wrong console paths tried by one account or IP before it is locked out for an hour
+ADMIN_CONSOLE_MAX_FAILURES = int(os.environ.get('ADMIN_CONSOLE_MAX_FAILURES', '10'))
 
 # CORS Configuration (allows Vite frontend dev server and production URLs)
 CORS_ALLOW_ALL_ORIGINS = DEBUG
