@@ -3,6 +3,8 @@ from django.contrib.auth import authenticate
 from django.contrib.auth.forms import PasswordResetForm
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -35,6 +37,7 @@ def auth_response(request, user, status_code=status.HTTP_200_OK):
 
 
 class RegisterView(APIView):
+    serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
@@ -45,6 +48,7 @@ class RegisterView(APIView):
 
 
 class LoginView(APIView):
+    serializer_class = LoginSerializer
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
@@ -61,6 +65,7 @@ class LoginView(APIView):
 
 
 class GoogleAuthView(APIView):
+    serializer_class = GoogleAuthSerializer
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
@@ -118,6 +123,7 @@ class GoogleAuthView(APIView):
 
 
 class ProfileView(APIView):
+    serializer_class = UserProfileSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
@@ -130,6 +136,8 @@ class ProfileView(APIView):
         return Response(serializer.data)
 
 
+@extend_schema(request={'multipart/form-data': {'type': 'object', 'properties': {'file': {'type': 'string', 'format': 'binary'}}}},
+               responses=OpenApiTypes.OBJECT)
 class AvatarUploadView(APIView):
     """Handles direct multipart image file uploads for patron profile photos."""
     permission_classes = [permissions.IsAuthenticated]
@@ -149,6 +157,7 @@ class AvatarUploadView(APIView):
 
 
 class PasswordChangeView(APIView):
+    serializer_class = PasswordChangeSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
@@ -161,6 +170,7 @@ class PasswordChangeView(APIView):
 
 class PasswordResetView(APIView):
     """Emails a reset link (Django's built-in reset-confirm page). Always returns 200 to avoid leaking accounts."""
+    serializer_class = PasswordResetSerializer
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
@@ -170,3 +180,16 @@ class PasswordResetView(APIView):
         if form.is_valid():
             form.save(request=request, use_https=request.is_secure())
         return Response({'message': 'If an account exists for that email, a reset link has been sent.'})
+
+
+@extend_schema(request=None)
+class BecomeOrganizerView(APIView):
+    """Self-service upgrade from attendee to organizer, so the user can create events."""
+    serializer_class = UserProfileSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        if request.user.role != 'curator':
+            request.user.role = 'curator'
+            request.user.save(update_fields=['role'])
+        return Response(UserProfileSerializer(request.user, context={'request': request}).data)

@@ -10,12 +10,14 @@ class TicketTierSerializer(serializers.ModelSerializer):
     # Frontend tier ids are strings; ids it invents for new tiers (e.g. "tier-standard-123") are ignored
     id = serializers.CharField(required=False, allow_blank=True)
     price = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0)
-    perks = serializers.ListField(child=serializers.CharField(), required=False)
+    perks = serializers.ListField(child=serializers.CharField(allow_blank=True), required=False)
+    # Total tickets of this type. Older clients send only `available` (tickets left), which still works.
+    quantity = serializers.IntegerField(min_value=0, required=False)
 
     class Meta:
         model = TicketTier
-        fields = ['id', 'name', 'price', 'description', 'available', 'perks']
-        extra_kwargs = {'description': {'required': False}, 'available': {'required': False}}
+        fields = ['id', 'name', 'price', 'description', 'quantity', 'available', 'perks']
+        extra_kwargs = {'description': {'required': False, 'allow_blank': True}, 'available': {'required': False}}
 
 
 class AgendaItemSerializer(serializers.ModelSerializer):
@@ -101,6 +103,22 @@ class GatheringSerializer(serializers.Serializer):
             ]}
         elif 'is_free' in attrs and not is_free and self.instance is not None and self.instance.starting_price <= 0:
             raise serializers.ValidationError({'pricing': 'Set a ticket price when an event stops being free.'})
+
+        tiers = (attrs.get('pricing') or {}).get('tiers')
+        if tiers:
+            if not is_free and any(t['price'] <= 0 for t in tiers):
+                raise serializers.ValidationError({'pricing': 'Every ticket type of a paid event needs a price above KSh 0.'})
+            if not is_free:
+                # The cheapest ticket is the price shown on the event
+                attrs['pricing']['startingPrice'] = min(t['price'] for t in tiers)
+            if all('quantity' in t for t in tiers):
+                # Capacity is the sum of the ticket types
+                attrs['capacity'] = sum(t['quantity'] for t in tiers)
+        capacity = attrs.get('capacity')
+        if capacity is not None and self.instance is not None and capacity < self.instance.attendee_count:
+            raise serializers.ValidationError(
+                {'capacity': f'{self.instance.attendee_count} places are already booked; capacity cannot be lower.'}
+            )
         return attrs
 
     def _image_url(self, obj):
@@ -154,7 +172,9 @@ class GatheringSerializer(serializers.Serializer):
                         'name': t.name,
                         'price': float(t.price),
                         'description': t.description,
+                        'quantity': t.quantity,
                         'available': t.available,
+                        'sold': t.sold,
                         'perks': t.perks,
                     }
                     for t in obj.tiers.all()
@@ -228,14 +248,35 @@ class GatheringSerializer(serializers.Serializer):
     def _sync_tiers(self, instance, tiers):
         existing = {str(t.id): t for t in instance.tiers.all()}
         keep = set()
-        for tier_data in tiers:
+        for order, tier_data in enumerate(tiers):
             tier_id = str(tier_data.pop('id', '') or '')
-            tier = existing.get(tier_id) or TicketTier(gathering=instance)
+            quantity = tier_data.pop('quantity', None)
+            available = tier_data.pop('available', None)
+            tier = existing.get(tier_id) or TicketTier(gathering=instance, quantity=0, available=0)
+            sold = tier.sold if tier.pk else 0
+            if quantity is not None:
+                if quantity < sold:
+                    raise serializers.ValidationError(
+                        {'pricing': f'"{tier_data.get("name", tier.name)}" already has {sold} tickets sold; '
+                                    f'its quantity cannot be lower.'}
+                    )
+                tier.quantity, tier.available = quantity, quantity - sold
+            elif available is not None:
+                tier.quantity, tier.available = available + sold, available
+            elif not tier.pk:
+                tier.quantity = tier.available = 50
             for field, value in tier_data.items():
                 setattr(tier, field, value)
+            tier.order = order
             tier.save()
             keep.add(str(tier.id))
-        instance.tiers.exclude(id__in=[int(i) for i in keep]).delete()
+        removed = instance.tiers.exclude(id__in=[int(i) for i in keep])
+        sold_out_of = [t.name for t in removed if t.sold > 0]
+        if sold_out_of:
+            raise serializers.ValidationError(
+                {'pricing': f'"{sold_out_of[0]}" already has tickets sold and cannot be removed.'}
+            )
+        removed.delete()
 
     def _sync_agenda(self, instance, agenda):
         instance.agenda_items.all().delete()

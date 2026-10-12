@@ -18,7 +18,9 @@ def event_payload(**overrides):
 
 class GatheringApiTests(APITestCase):
     def setUp(self):
-        self.owner = User.objects.create_user(username='o@x.com', email='o@x.com', password='pw-Owner-123')
+        # Creating events needs the organizer role (Phase 2); the assertions below are unchanged
+        self.owner = User.objects.create_user(username='o@x.com', email='o@x.com', password='pw-Owner-123',
+                                              role='curator')
         self.other = User.objects.create_user(username='p@x.com', email='p@x.com', password='pw-Other-123')
 
     def test_seed_and_public_list(self):
@@ -131,3 +133,65 @@ class OrganizerStatsTests(APITestCase):
         empty = Gathering.objects.filter(organizer=self.organizer).exclude(id=self.event.id).first()
         self.assertEqual(self.client.get(f'/api/gatherings/{empty.id}/').data['organizerStats'],
                          {'revenue': 0.0, 'ticketsSold': 0})
+
+
+class TierEditorAndRoleTests(APITestCase):
+    def setUp(self):
+        self.curator = User.objects.create_user(username='c@x.com', email='c@x.com', password='pw-Curator-1',
+                                                role='curator')
+
+    def test_patron_must_become_organizer_to_create(self):
+        patron = User.objects.create_user(username='p@x.com', email='p@x.com', password='pw-Patron-123')
+        self.client.force_authenticate(patron)
+        self.assertEqual(self.client.post('/api/gatherings/', event_payload(), format='json').status_code, 403)
+        res = self.client.post('/api/auth/become-organizer/')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['role'], 'curator')
+        self.assertEqual(self.client.post('/api/gatherings/', event_payload(), format='json').status_code, 201)
+
+    def test_tier_quantities_set_capacity_and_order(self):
+        self.client.force_authenticate(self.curator)
+        payload = event_payload()
+        payload['pricing'] = {'currency': 'KES', 'startingPrice': 999, 'tiers': [
+            {'id': '', 'name': 'VIP', 'price': 3000, 'quantity': 20, 'perks': ['Front row']},
+            {'id': '', 'name': 'Regular', 'price': 1000, 'quantity': 80},
+        ]}
+        res = self.client.post('/api/gatherings/', payload, format='json')
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertEqual(res.data['capacity'], 100)
+        self.assertEqual(res.data['pricing']['startingPrice'], 1000)
+        self.assertEqual([t['name'] for t in res.data['pricing']['tiers']], ['VIP', 'Regular'])
+        self.assertEqual(res.data['pricing']['tiers'][0]['available'], 20)
+
+        # Book 5 VIP tickets, then the quantity cannot drop below what is sold
+        gid, vip = res.data['id'], res.data['pricing']['tiers'][0]
+        booking = self.client.post('/api/bookings/', {
+            'eventId': gid, 'tierId': vip['id'], 'quantity': 5, 'attendeeName': 'A', 'attendeeEmail': 'a@x.com',
+            'paymentMethod': 'card'}, format='json')
+        self.assertEqual(booking.status_code, 201, booking.data)
+
+        event = self.client.get(f'/api/gatherings/{gid}/').data
+        tiers = event['pricing']['tiers']
+        self.assertEqual((tiers[0]['sold'], tiers[0]['available']), (5, 15))
+        tiers[0]['quantity'] = 4
+        self.assertEqual(self.client.put(f'/api/gatherings/{gid}/', event, format='json').status_code, 400)
+
+        # Grow VIP to 30 and drop Regular, which has no sales
+        tiers[0]['quantity'] = 30
+        event['pricing']['tiers'] = [tiers[0]]
+        res = self.client.put(f'/api/gatherings/{gid}/', event, format='json')
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.data['capacity'], 30)
+        self.assertEqual(res.data['pricing']['tiers'][0]['available'], 25)
+
+        # A tier with sales cannot be removed
+        event = res.data
+        event['pricing']['tiers'] = [{'id': '', 'name': 'Other', 'price': 500, 'quantity': 10}]
+        self.assertEqual(self.client.put(f'/api/gatherings/{gid}/', event, format='json').status_code, 400)
+
+    def test_paid_event_tiers_need_a_price(self):
+        self.client.force_authenticate(self.curator)
+        payload = event_payload()
+        # Replace (not mutate) the nested pricing, which is shared with the SEED fixture
+        payload['pricing'] = {**payload['pricing'], 'tiers': [{'id': '', 'name': 'Oops', 'price': 0, 'quantity': 10}]}
+        self.assertEqual(self.client.post('/api/gatherings/', payload, format='json').status_code, 400)

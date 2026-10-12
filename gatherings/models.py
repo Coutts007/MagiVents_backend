@@ -80,8 +80,18 @@ class TicketTier(models.Model):
     name = models.CharField(max_length=120)  # e.g. "VIP"
     price = models.DecimalField(max_digits=10, decimal_places=2)
     description = models.TextField(blank=True, default='')
+    # Total tickets of this type; `available` is what is left after bookings
+    quantity = models.PositiveIntegerField(default=50)
     available = models.PositiveIntegerField(default=50)
     perks = models.JSONField(default=list, blank=True)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order', 'id']
+
+    @property
+    def sold(self):
+        return max(0, self.quantity - self.available)
 
     def __str__(self):
         return f"{self.name} - {self.gathering.title}"

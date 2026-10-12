@@ -25,6 +25,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from accounts.views import (
     AvatarUploadView,
+    BecomeOrganizerView,
     GoogleAuthView,
     LoginView,
     PasswordChangeView,
@@ -34,11 +35,18 @@ from accounts.views import (
 )
 from core.views import PublicConfigView
 from gatherings.views import GatheringViewSet
-from tickets.views import BookingViewSet, BookmarkListView, BookmarkToggleView
+from tickets.views import (
+    BookingViewSet,
+    BookmarkListView,
+    BookmarkToggleView,
+    PromoCodeViewSet,
+    PromoValidateView,
+)
 
 router = DefaultRouter()
 router.register(r'gatherings', GatheringViewSet, basename='gatherings')
 router.register(r'bookings', BookingViewSet, basename='bookings')
+router.register(r'promo-codes', PromoCodeViewSet, basename='promo-codes')
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -53,6 +61,7 @@ urlpatterns = [
     path('api/auth/avatar/upload/', AvatarUploadView.as_view(), name='avatar_upload'),
     path('api/auth/password/change/', PasswordChangeView.as_view(), name='password_change_api'),
     path('api/auth/password/reset/', PasswordResetView.as_view(), name='password_reset_api'),
+    path('api/auth/become-organizer/', BecomeOrganizerView.as_view(), name='become_organizer'),
     # Django's built-in pages that the password reset email links to
     path('accounts/', include('django.contrib.auth.urls')),
 
@@ -64,6 +73,9 @@ urlpatterns = [
     path('api/config/', PublicConfigView.as_view(), name='public_config'),
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger_ui'),
+
+    # Promo code check at checkout (must come before the router's promo-codes/<pk>/ route)
+    path('api/promo-codes/validate/', PromoValidateView.as_view(), name='promo_validate'),
 
     # Gathering & Booking Resources
     path('api/', include(router.urls)),

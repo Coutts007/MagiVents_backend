@@ -18,7 +18,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'email', 'avatarUrl', 'bio', 'city', 'role', 'joinedDate', 'authProvider']
         read_only_fields = ['role']
 
-    def get_joinedDate(self, obj):
+    def get_joinedDate(self, obj) -> str:
         return obj.joined_date.strftime('%B %Y') if obj.joined_date else ''
 
     def to_representation(self, instance):

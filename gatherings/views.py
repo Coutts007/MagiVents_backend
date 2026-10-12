@@ -16,9 +16,18 @@ class IsOrganizerOrReadOnly(permissions.BasePermission):
         return obj.organizer_id == request.user.id
 
 
+class IsOrganizerRoleToCreate(permissions.BasePermission):
+    message = 'Only organizers can create events. Become an organizer from your profile first.'
+
+    def has_permission(self, request, view):
+        if view.action != 'create':
+            return True
+        return bool(request.user and request.user.is_authenticated and request.user.is_organizer)
+
+
 class GatheringViewSet(viewsets.ModelViewSet):
     serializer_class = GatheringSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOrganizerOrReadOnly]
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOrganizerRoleToCreate, IsOrganizerOrReadOnly]
     filter_backends = [filters.SearchFilter]
     search_fields = ['title', 'subtitle', 'category', 'venue_name', 'venue_city', 'host_name', 'tags']
 

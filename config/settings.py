@@ -86,6 +86,7 @@ REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_THROTTLE_RATES': {
         'guest_bookings': os.environ.get('GUEST_BOOKING_RATE', '20/hour'),
+        'promo_validate': os.environ.get('PROMO_VALIDATE_RATE', '30/minute'),
     },
 }
 
@@ -168,7 +169,7 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
+            'NAME': os.environ.get('SQLITE_PATH') or BASE_DIR / 'db.sqlite3',
         }
     }
 

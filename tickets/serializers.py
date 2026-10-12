@@ -5,10 +5,12 @@ from django.db import transaction
 from rest_framework import serializers
 
 from gatherings.models import Gathering, TicketTier
-from .models import Booking
+from .models import Booking, PromoCode
 
-# Mirrors the codes accepted by the checkout form in the frontend
-PROMO_CODES = {'KARIBU15': Decimal('0.15')}
+
+def promo_discount(amount, percent_off):
+    """Discount in whole shillings, rounded half up."""
+    return (Decimal(amount) * Decimal(percent_off) / Decimal(100)).quantize(Decimal('1'), ROUND_HALF_UP)
 
 
 def generate_ticket_code():
@@ -70,10 +72,7 @@ class BookingSerializer(serializers.ModelSerializer):
         }
 
     def validate_promoCode(self, value):
-        value = value.strip().upper()
-        if value and value not in PROMO_CODES:
-            raise serializers.ValidationError('Invalid promotion code.')
-        return value
+        return value.strip().upper()
 
     @transaction.atomic
     def create(self, validated_data):
@@ -115,7 +114,18 @@ class BookingSerializer(serializers.ModelSerializer):
             tier_name = 'General Admission'
 
         base_total = unit_price * quantity
-        discount = (base_total * PROMO_CODES[promo]).quantize(Decimal('1'), ROUND_HALF_UP) if promo else Decimal('0')
+        discount = Decimal('0')
+        if promo:
+            code = PromoCode.lookup(promo, gathering)
+            if code is None:
+                raise serializers.ValidationError({'promoCode': 'Invalid promotion code.'})
+            code = PromoCode.objects.select_for_update().get(pk=code.pk)
+            problem = code.problem(gathering)
+            if problem:
+                raise serializers.ValidationError({'promoCode': problem})
+            discount = promo_discount(base_total, code.percent_off)
+            code.use_count += 1
+            code.save(update_fields=['use_count'])
 
         total = max(Decimal('0'), base_total - discount)
         if total == 0:
@@ -132,6 +142,7 @@ class BookingSerializer(serializers.ModelSerializer):
             # Guests book without an account; their ticket is tied to the attendee email only
             user=user if user.is_authenticated else None,
             gathering=gathering,
+            tier=tier,
             tier_name=tier_name,
             unit_price=unit_price,
             discount=discount,
@@ -146,3 +157,62 @@ class BookingSerializer(serializers.ModelSerializer):
             gathering.status = 'sold_out'
         gathering.save(update_fields=['attendee_count', 'status'])
         return booking
+
+
+class PromoCodeSerializer(serializers.ModelSerializer):
+    """Codes an organizer manages for one of their own events."""
+    id = serializers.CharField(read_only=True)
+    eventId = serializers.CharField(write_only=True, required=False)
+    eventTitle = serializers.CharField(source='gathering.title', read_only=True)
+    percentOff = serializers.IntegerField(source='percent_off', min_value=1, max_value=100)
+    validFrom = serializers.DateTimeField(source='valid_from', required=False, allow_null=True)
+    validUntil = serializers.DateTimeField(source='valid_until', required=False, allow_null=True)
+    maxUses = serializers.IntegerField(source='max_uses', required=False, allow_null=True, min_value=1)
+    useCount = serializers.IntegerField(source='use_count', read_only=True)
+    isActive = serializers.BooleanField(source='is_active', required=False)
+
+    class Meta:
+        model = PromoCode
+        fields = ['id', 'code', 'percentOff', 'eventId', 'eventTitle', 'validFrom', 'validUntil',
+                  'maxUses', 'useCount', 'isActive']
+
+    def to_representation(self, obj):
+        data = super().to_representation(obj)
+        data['eventId'] = str(obj.gathering_id) if obj.gathering_id else None
+        return data
+
+    def validate_code(self, value):
+        value = value.strip().upper()
+        if not value.replace('-', '').isalnum():
+            raise serializers.ValidationError('Use letters, numbers and dashes only.')
+        return value
+
+    def validate_eventId(self, value):
+        user = self.context['request'].user
+        gathering = Gathering.objects.filter(id=value, organizer=user).first()
+        if gathering is None:
+            raise serializers.ValidationError('Choose one of your own events.')
+        return gathering
+
+    def validate(self, attrs):
+        gathering = attrs.pop('eventId', None) or getattr(self.instance, 'gathering', None)
+        if gathering is None:
+            # Site-wide codes are managed by staff in the Django admin
+            raise serializers.ValidationError({'eventId': 'Choose one of your own events.'})
+        attrs['gathering'] = gathering
+        start = attrs.get('valid_from', getattr(self.instance, 'valid_from', None))
+        end = attrs.get('valid_until', getattr(self.instance, 'valid_until', None))
+        if start and end and end <= start:
+            raise serializers.ValidationError({'validUntil': 'The end must be after the start.'})
+        code = attrs.get('code', getattr(self.instance, 'code', ''))
+        clash = PromoCode.objects.filter(code=code, gathering=gathering).exclude(pk=getattr(self.instance, 'pk', None))
+        if clash.exists():
+            raise serializers.ValidationError({'code': 'This event already has a code with that name.'})
+        return attrs
+
+
+class PromoValidateSerializer(serializers.Serializer):
+    code = serializers.CharField(max_length=40)
+    eventId = serializers.CharField()
+    tierId = serializers.CharField(required=False, allow_blank=True)
+    quantity = serializers.IntegerField(required=False, min_value=1, max_value=20)

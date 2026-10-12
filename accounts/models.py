@@ -23,6 +23,10 @@ class User(AbstractUser):
     google_id = models.CharField(max_length=255, null=True, blank=True, unique=True)
     joined_date = models.DateField(auto_now_add=True)
 
+    @property
+    def is_organizer(self):
+        return self.role == 'curator'
+
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username']
 
