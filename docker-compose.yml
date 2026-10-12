@@ -1,5 +1,4 @@
-version: '3.8'
-
+# Development stack (runserver, demo data). For production use docker-compose.prod.yml.
 services:
   db:
     image: postgres:15-alpine

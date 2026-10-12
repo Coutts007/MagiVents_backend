@@ -27,15 +27,36 @@ load_dotenv(BASE_DIR / '.env')
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get(
-    'DJANGO_SECRET_KEY',
-    'django-insecure-t*p9+ac6jci!-!!n&j@cl0w$#drvm_^=*_i(k#qh%eajl8mmb8',
-)
+DEV_SECRET_KEY = 'django-insecure-t*p9+ac6jci!-!!n&j@cl0w$#drvm_^=*_i(k#qh%eajl8mmb8'
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', DEV_SECRET_KEY)
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DJANGO_DEBUG', 'True') == 'True'
 
+if not DEBUG and SECRET_KEY in (DEV_SECRET_KEY, '', 'change-me'):
+    raise ImproperlyConfigured(
+        'DJANGO_SECRET_KEY must be set to a long random value when DJANGO_DEBUG=False. '
+        'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(50))"'
+    )
+
 ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost,0.0.0.0').split(',')
+# Origins allowed to POST forms to Django itself (admin, password reset pages), e.g. https://api.example.co.ke
+CSRF_TRUSTED_ORIGINS = [o for o in os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(',') if o]
+
+if not DEBUG:
+    # HTTPS everywhere. The proxy in front of Django (nginx, a load balancer, a PaaS router) terminates TLS
+    # and sets X-Forwarded-Proto.
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_SSL_REDIRECT = os.environ.get('SECURE_SSL_REDIRECT', 'True') == 'True'
+    # Load balancer health checks often come in over plain HTTP
+    SECURE_REDIRECT_EXEMPT = [r'^api/health/$']
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = int(os.environ.get('SECURE_HSTS_SECONDS', '31536000'))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = os.environ.get('SECURE_HSTS_INCLUDE_SUBDOMAINS', 'False') == 'True'
+    SECURE_HSTS_PRELOAD = False
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
 
 
 
@@ -65,6 +86,8 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',  # Top of middleware stack
     'django.middleware.security.SecurityMiddleware',
+    # Serves collected static files (admin, API docs) efficiently, without a separate web server
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -163,9 +186,31 @@ CORS_ALLOWED_ORIGINS = os.environ.get(
     'http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173',
 ).split(',')
 
-# Media Files (User avatars and Event artwork)
+# Media Files (User avatars and Event artwork): local media/ unless an S3-compatible bucket is configured
 MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+MEDIA_ROOT = os.environ.get('MEDIA_ROOT') or os.path.join(BASE_DIR, 'media')
+
+STORAGES = {
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage'},
+}
+if os.environ.get('AWS_STORAGE_BUCKET_NAME'):
+    # AWS S3, Cloudflare R2, DigitalOcean Spaces, Backblaze B2... via django-storages
+    STORAGES['default'] = {
+        'BACKEND': 'storages.backends.s3.S3Storage',
+        'OPTIONS': {
+            'bucket_name': os.environ['AWS_STORAGE_BUCKET_NAME'],
+            'access_key': os.environ.get('AWS_ACCESS_KEY_ID', ''),
+            'secret_key': os.environ.get('AWS_SECRET_ACCESS_KEY', ''),
+            'endpoint_url': os.environ.get('AWS_S3_ENDPOINT_URL') or None,
+            'region_name': os.environ.get('AWS_S3_REGION_NAME') or None,
+            # Public CDN / bucket domain for media URLs, e.g. media.example.co.ke
+            'custom_domain': os.environ.get('AWS_S3_CUSTOM_DOMAIN') or None,
+            # Avatars and posters are public; the bucket (or CDN) must allow public reads
+            'querystring_auth': os.environ.get('AWS_QUERYSTRING_AUTH', 'False') == 'True',
+            'file_overwrite': False,
+        },
+    }
 
 # Event artwork and avatars arrive as base64 data URLs inside JSON bodies
 DATA_UPLOAD_MAX_MEMORY_SIZE = 15 * 1024 * 1024
@@ -222,6 +267,8 @@ if os.environ.get('POSTGRES_HOST'):
             'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
             'HOST': os.environ['POSTGRES_HOST'],
             'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+            'CONN_MAX_AGE': int(os.environ.get('POSTGRES_CONN_MAX_AGE', '60')),
+            'CONN_HEALTH_CHECKS': True,
         }
     }
 else:
@@ -268,6 +315,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = os.environ.get('STATIC_ROOT') or os.path.join(BASE_DIR, 'staticfiles')
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -293,5 +341,17 @@ else:
     }
 
 # Use Redis for session storage for faster authentication checks
-SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+# Sessions (admin only; the API uses JWT): cached for speed, stored in the database so they survive
+# restarts and work across Gunicorn workers even without Redis
+SESSION_ENGINE = 'django.contrib.sessions.backends.cached_db'
 SESSION_CACHE_ALIAS = 'default'
+
+# Logs go to stdout/stderr, where Docker and most hosts collect them
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {'plain': {'format': '%(asctime)s %(levelname)s %(name)s: %(message)s'}},
+    'handlers': {'console': {'class': 'logging.StreamHandler', 'formatter': 'plain'}},
+    'root': {'handlers': ['console'], 'level': os.environ.get('LOG_LEVEL', 'INFO')},
+    'loggers': {'django.request': {'handlers': ['console'], 'level': 'ERROR', 'propagate': False}},
+}

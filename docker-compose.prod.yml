@@ -1,0 +1,85 @@
+# Production stack: PostgreSQL, Redis, the API under Gunicorn, a worker that releases expired ticket
+# holds, and the frontend (nginx serving the built app and proxying /api to the API).
+#
+#   cp .env.example .env.production   # fill in secrets; set DJANGO_DEBUG=False
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+#
+# Put a TLS-terminating proxy (Caddy, Traefik, a cloud load balancer) in front of port 80; it must set
+# X-Forwarded-Proto. Unlike docker-compose.yml, this file never seeds demo data or runs runserver.
+
+services:
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-magivents_db}
+      POSTGRES_USER: ${POSTGRES_USER:-magivents_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+
+  api:
+    build: .
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      POSTGRES_HOST: db
+      REDIS_URL: redis://redis:6379/1
+      BEHIND_PROXY: "True"
+    # Apply migrations, then serve
+    command: sh -c "python manage.py migrate --noinput && exec gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 60 --access-logfile -"
+    volumes:
+      - media:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  holds:
+    # Releases tickets held by unpaid bookings once their time runs out (also done lazily by the API)
+    build: .
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      POSTGRES_HOST: db
+      REDIS_URL: redis://redis:6379/1
+    command: sh -c "while true; do python manage.py release_expired_holds; sleep 60; done"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ../magivents_interface
+      args:
+        VITE_API_BASE_URL: /api
+        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-}
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      # Uploaded avatars and posters, when no S3 bucket is configured
+      - media:/srv/media:ro
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  media:

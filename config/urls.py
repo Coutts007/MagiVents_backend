@@ -33,7 +33,7 @@ from accounts.views import (
     ProfileView,
     RegisterView,
 )
-from core.views import GeocodeView, PublicConfigView
+from core.views import GeocodeView, HealthView, PublicConfigView
 from payments.views import BookingPayView, BookingStatusView
 from gatherings.views import GatheringViewSet
 from tickets.views import (
@@ -75,6 +75,7 @@ urlpatterns = [
     path('api/bookmarks/toggle/<str:gathering_id>/', BookmarkToggleView.as_view(), name='bookmark_toggle'),
 
     # Public configuration and API documentation
+    path('api/health/', HealthView.as_view(), name='health'),
     path('api/config/', PublicConfigView.as_view(), name='public_config'),
     path('api/geocode/', GeocodeView.as_view(), name='geocode'),
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),

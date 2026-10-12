@@ -42,3 +42,35 @@ class GeocodeView(APIView):
             return Response({'results': search_places(query)})
         except GeocodingError as exc:
             return Response({'error': str(exc)}, status=503)
+
+
+@extend_schema(responses=OpenApiTypes.OBJECT)
+class HealthView(APIView):
+    """For load balancers and uptime checks: 200 when the database and cache answer, 503 otherwise."""
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+    throttle_classes = []
+
+    def get(self, request):
+        import uuid
+
+        from django.core.cache import cache
+        from django.db import connection
+
+        checks = {}
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT 1')
+                cursor.fetchone()
+            checks['database'] = 'ok'
+        except Exception:  # noqa: BLE001 - any failure means unhealthy
+            checks['database'] = 'error'
+        try:
+            key, value = f'health:{uuid.uuid4().hex}', 'ok'
+            cache.set(key, value, 10)
+            checks['cache'] = 'ok' if cache.get(key) == value else 'error'
+            cache.delete(key)
+        except Exception:  # noqa: BLE001
+            checks['cache'] = 'error'
+        healthy = all(v == 'ok' for v in checks.values())
+        return Response({'status': 'ok' if healthy else 'error', **checks}, status=200 if healthy else 503)

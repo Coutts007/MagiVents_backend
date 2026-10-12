@@ -5,3 +5,6 @@ __pycache__/
 media/
 db.sqlite3*
 *.sql
+staticfiles/
+.env.*
+!.env.example
