@@ -87,6 +87,8 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'guest_bookings': os.environ.get('GUEST_BOOKING_RATE', '20/hour'),
         'promo_validate': os.environ.get('PROMO_VALIDATE_RATE', '30/minute'),
+        'ticket_lookup': os.environ.get('TICKET_LOOKUP_RATE', '10/hour'),
+        'ticket_resend': os.environ.get('TICKET_RESEND_RATE', '5/hour'),
     },
 }
 
@@ -125,6 +127,17 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 15 * 1024 * 1024
 # Password reset emails are printed to the runserver console in development
 EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'MagiVents <magiventskenya@gmail.com>')
+MAGIVENTS_CONTACT_EMAIL = os.environ.get('MAGIVENTS_CONTACT_EMAIL', 'magiventskenya@gmail.com')
+# SMTP settings, used when EMAIL_BACKEND is django.core.mail.backends.smtp.EmailBackend
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'localhost')
+EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '587'))
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
+EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True') == 'True'
+EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', '15'))
+
+# Public address of the frontend; ticket QR codes and email links point here
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
 
 # Google OAuth Client ID (must match Google Cloud Console)
 GOOGLE_OAUTH_CLIENT_ID = os.environ.get('GOOGLE_OAUTH_CLIENT_ID', '')

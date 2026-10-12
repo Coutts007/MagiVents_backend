@@ -1,10 +1,31 @@
+import re
+
+from django.db import transaction
 from django.db.models import Q, Sum
-from rest_framework import filters, permissions, viewsets
+from django.utils import timezone
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
+from rest_framework import filters, permissions, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
+
+from tickets.models import Booking
+from tickets.serializers import CheckInSerializer, attendee_row, normalize_ticket_code
 
 from .models import Gathering
 from .serializers import GatheringSerializer
+
+UUID_RE = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.I)
+
+
+def find_booking_for_check_in(value):
+    """A booking from what the door staff scanned or typed: the QR URL, a UUID, or the ticket code."""
+    match = UUID_RE.search(value)
+    bookings = Booking.objects.select_for_update().select_related('gathering')
+    if match:
+        return bookings.filter(id=match.group(0).lower()).first()
+    return bookings.filter(ticket_code=normalize_ticket_code(value)).first()
 
 
 class IsOrganizerOrReadOnly(permissions.BasePermission):
@@ -51,3 +72,52 @@ class GatheringViewSet(viewsets.ModelViewSet):
         gatherings = self.get_queryset().filter(organizer=request.user)
         serializer = self.get_serializer(gatherings, many=True)
         return Response(serializer.data)
+
+    def _own_gathering(self):
+        gathering = self.get_object()
+        if gathering.organizer_id != self.request.user.id:
+            raise PermissionDenied('Only the organizer of this gathering can see its attendees.')
+        return gathering
+
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    @extend_schema(responses=OpenApiTypes.OBJECT)
+    def attendees(self, request, pk=None):
+        """Every booking for the organizer's event, with check-in progress."""
+        gathering = self._own_gathering()
+        bookings = list(gathering.bookings.order_by('attendee_name'))
+        checked_in = [b for b in bookings if b.checked_in_at]
+        return Response({
+            'counts': {
+                'bookings': len(bookings),
+                'people': sum(b.quantity for b in bookings),
+                'checkedInBookings': len(checked_in),
+                'checkedInPeople': sum(b.quantity for b in checked_in),
+            },
+            'attendees': [attendee_row(b) for b in bookings],
+        })
+
+    @action(detail=True, methods=['post'], url_path='check-in', permission_classes=[permissions.IsAuthenticated])
+    @extend_schema(request=CheckInSerializer, responses=OpenApiTypes.OBJECT)
+    def check_in(self, request, pk=None):
+        """Checks a ticket in at the door. Only the event's organizer can do this."""
+        gathering = self._own_gathering()
+        serializer = CheckInSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            booking = find_booking_for_check_in(serializer.validated_data['ticket'])
+            if booking is None:
+                return Response({'result': 'not_found', 'message': 'No ticket matches that code.'},
+                                status=status.HTTP_404_NOT_FOUND)
+            if booking.gathering_id != gathering.id:
+                # Say nothing about the other event's attendee
+                return Response({'result': 'wrong_event', 'message': 'This ticket is for a different event.'},
+                                status=status.HTTP_409_CONFLICT)
+            if booking.checked_in_at:
+                return Response({'result': 'already_checked_in', 'message': 'This ticket was already checked in.',
+                                 'attendee': attendee_row(booking)}, status=status.HTTP_409_CONFLICT)
+            booking.checked_in_at = timezone.now()
+            booking.checked_in_by = request.user
+            booking.save(update_fields=['checked_in_at', 'checked_in_by'])
+        return Response({'result': 'checked_in', 'message': f'Welcome, {booking.attendee_name}.',
+                         'attendee': attendee_row(booking)})

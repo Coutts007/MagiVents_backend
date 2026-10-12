@@ -1,3 +1,4 @@
+from django.http import HttpResponse
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, permissions, status, viewsets
@@ -7,7 +8,16 @@ from rest_framework.views import APIView
 
 from gatherings.models import Gathering
 from .models import Booking, Bookmark, PromoCode
-from .serializers import BookingSerializer, PromoCodeSerializer, PromoValidateSerializer, promo_discount
+from .documents import build_ticket_pdf
+from .emails import send_booking_confirmation
+from .serializers import (
+    BookingSerializer,
+    PromoCodeSerializer,
+    PromoValidateSerializer,
+    TicketLookupSerializer,
+    normalize_ticket_code,
+    promo_discount,
+)
 
 
 class BookingViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin,
@@ -103,3 +113,79 @@ class PromoValidateView(APIView):
             discount = promo_discount(subtotal, code.percent_off)
             result.update(subtotal=float(subtotal), discount=float(discount), total=float(max(0, subtotal - discount)))
         return Response(result)
+
+
+# --- Tickets by UUID (the QR code and email link carry the UUID, which is not guessable) -----------
+
+def ticket_response(request, booking):
+    return Response(BookingSerializer(booking, context={'request': request}).data)
+
+
+def find_ticket(booking_id):
+    return Booking.objects.select_related('gathering').filter(id=str(booking_id)).first()
+
+
+@extend_schema(responses=BookingSerializer)
+class TicketDetailView(APIView):
+    """A single ticket, for the link in the QR code and email. Works for guests."""
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, booking_id):
+        booking = find_ticket(booking_id)
+        if booking is None:
+            return Response({'error': 'Ticket not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return ticket_response(request, booking)
+
+
+@extend_schema(responses={(200, 'application/pdf'): OpenApiTypes.BINARY})
+class TicketPdfView(APIView):
+    """The ticket as a PDF with its QR code, generated on the server."""
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, booking_id):
+        booking = find_ticket(booking_id)
+        if booking is None:
+            return Response({'error': 'Ticket not found.'}, status=status.HTTP_404_NOT_FOUND)
+        response = HttpResponse(build_ticket_pdf(booking), content_type='application/pdf')
+        disposition = 'inline' if request.query_params.get('inline') else 'attachment'
+        response['Content-Disposition'] = f'{disposition}; filename="MagiVents-Ticket-{booking.ticket_code}.pdf"'
+        return response
+
+
+@extend_schema(request=None, responses=OpenApiTypes.OBJECT)
+class TicketResendView(APIView):
+    """Sends the confirmation email again, always to the attendee's own address."""
+    permission_classes = [permissions.AllowAny]
+    throttle_scope = 'ticket_resend'
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request, booking_id):
+        booking = find_ticket(booking_id)
+        if booking is None:
+            return Response({'error': 'Ticket not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if not send_booking_confirmation(booking):
+            return Response({'error': 'The email could not be sent right now. Please try again later.'},
+                            status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return Response({'message': f'Ticket sent to {booking.attendee_email}.'})
+
+
+class TicketLookupView(APIView):
+    """Guests find their ticket with the ticket code and the email they booked with."""
+    permission_classes = [permissions.AllowAny]
+    serializer_class = TicketLookupSerializer
+    throttle_scope = 'ticket_lookup'
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        serializer = TicketLookupSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        code = normalize_ticket_code(serializer.validated_data['ticketCode'])
+        email = serializer.validated_data['email'].strip()
+        booking = Booking.objects.select_related('gathering').filter(
+            ticket_code=code, attendee_email__iexact=email
+        ).first()
+        if booking is None:
+            # The same answer whether the code or the email was wrong
+            return Response({'error': 'We could not find a ticket with that code and email.'},
+                            status=status.HTTP_404_NOT_FOUND)
+        return ticket_response(request, booking)

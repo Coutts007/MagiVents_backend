@@ -5,6 +5,8 @@ from django.db import transaction
 from rest_framework import serializers
 
 from gatherings.models import Gathering, TicketTier
+from .documents import ticket_url
+from .emails import send_booking_confirmation
 from .models import Booking, PromoCode
 
 
@@ -69,6 +71,9 @@ class BookingSerializer(serializers.ModelSerializer):
             'currency': obj.currency,
             'totalInKes': float(obj.total_in_kes) if obj.total_in_kes is not None else None,
             'notes': obj.notes or None,
+            # The QR code encodes this link, which carries the booking's UUID
+            'ticketUrl': ticket_url(obj),
+            'checkedInAt': obj.checked_in_at.isoformat() if obj.checked_in_at else None,
         }
 
     def validate_promoCode(self, value):
@@ -156,6 +161,8 @@ class BookingSerializer(serializers.ModelSerializer):
         if gathering.attendee_count >= gathering.capacity:
             gathering.status = 'sold_out'
         gathering.save(update_fields=['attendee_count', 'status'])
+        # Sent after the transaction commits; a failed email never fails the booking
+        transaction.on_commit(lambda: send_booking_confirmation(booking))
         return booking
 
 
@@ -216,3 +223,31 @@ class PromoValidateSerializer(serializers.Serializer):
     eventId = serializers.CharField()
     tierId = serializers.CharField(required=False, allow_blank=True)
     quantity = serializers.IntegerField(required=False, min_value=1, max_value=20)
+
+
+def normalize_ticket_code(value):
+    """Accepts "mv-123456", "MV 123456" or just "123456"."""
+    digits = ''.join(ch for ch in value if ch.isdigit())
+    return f'MV-{digits}' if digits else value.strip().upper()
+
+
+class TicketLookupSerializer(serializers.Serializer):
+    ticketCode = serializers.CharField(max_length=60)
+    email = serializers.EmailField()
+
+
+class CheckInSerializer(serializers.Serializer):
+    ticket = serializers.CharField(max_length=500, help_text='Ticket code, booking UUID, or the URL in the QR code')
+
+
+def attendee_row(booking):
+    return {
+        'id': str(booking.id),
+        'ticketCode': booking.ticket_code,
+        'attendeeName': booking.attendee_name,
+        'attendeeEmail': booking.attendee_email,
+        'tierName': booking.tier_name,
+        'quantity': booking.quantity,
+        'bookingDate': booking.booking_date.isoformat(),
+        'checkedInAt': booking.checked_in_at.isoformat() if booking.checked_in_at else None,
+    }

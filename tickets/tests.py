@@ -177,3 +177,121 @@ class PromoCodeTests(APITestCase):
         # Site-wide codes are not created through the API
         res = self.client.post('/api/promo-codes/', {'code': 'X', 'percentOff': 20}, format='json')
         self.assertEqual(res.status_code, 400)
+
+
+from unittest import mock
+
+from django.core import mail
+from django.test import override_settings
+
+
+@override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend', FRONTEND_URL='https://magivents.test')
+class TicketDeliveryTests(APITestCase):
+    def setUp(self):
+        call_command('seed_gatherings', verbosity=0)
+        self.event = Gathering.objects.get(id='nairobi-sounds-live')
+        self.tier = self.event.tiers.first()
+        self.organizer = User.objects.get(email='curator@magivents.local')
+
+    def book(self, email='guest@x.com', event=None, tier=None):
+        event, tier = event or self.event, tier or self.tier
+        with self.captureOnCommitCallbacks(execute=True):
+            res = self.client.post('/api/bookings/', {
+                'eventId': event.id, 'tierId': str(tier.id), 'quantity': 2, 'attendeeName': 'Wanjiru Guest',
+                'attendeeEmail': email, 'paymentMethod': 'card'}, format='json')
+        self.assertEqual(res.status_code, 201, res.data)
+        return res.data
+
+    def test_confirmation_email_has_html_text_and_pdf(self):
+        booking = self.book()
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, ['guest@x.com'])
+        self.assertIn(booking['ticketCode'], message.subject)
+        self.assertIn(booking['ticketCode'], message.body)
+        html, mime = message.alternatives[0]
+        self.assertEqual(mime, 'text/html')
+        self.assertIn(f"https://magivents.test/?ticket={booking['id']}", html)
+        name, content, mimetype = message.attachments[0]
+        self.assertEqual(mimetype, 'application/pdf')
+        self.assertTrue(content.startswith(b'%PDF'))
+
+    def test_failed_email_never_fails_the_booking(self):
+        with mock.patch('django.core.mail.EmailMultiAlternatives.send', side_effect=OSError('SMTP down')):
+            booking = self.book()
+        self.assertTrue(Booking.objects.filter(id=booking['id']).exists())
+
+    def test_qr_url_uses_uuid_and_pdf_download(self):
+        booking = self.book()
+        self.assertEqual(booking['ticketUrl'], f"https://magivents.test/?ticket={booking['id']}")
+        self.assertNotIn(booking['ticketCode'], booking['ticketUrl'])
+        res = self.client.get(f"/api/tickets/{booking['id']}/pdf/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res['Content-Type'], 'application/pdf')
+        self.assertTrue(res.content.startswith(b'%PDF'))
+        self.assertEqual(self.client.get(f"/api/tickets/{booking['id']}/").data['ticketCode'], booking['ticketCode'])
+
+    def test_resend_goes_to_the_attendee(self):
+        booking = self.book()
+        mail.outbox.clear()
+        res = self.client.post(f"/api/tickets/{booking['id']}/resend/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(mail.outbox[0].to, ['guest@x.com'])
+        with mock.patch('django.core.mail.EmailMultiAlternatives.send', side_effect=OSError('SMTP down')):
+            self.assertEqual(self.client.post(f"/api/tickets/{booking['id']}/resend/").status_code, 503)
+
+    def test_guest_lookup_needs_code_and_email(self):
+        booking = self.book()
+        url = '/api/tickets/lookup/'
+        ok = self.client.post(url, {'ticketCode': booking['ticketCode'].lower(), 'email': 'GUEST@x.com'}, format='json')
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(ok.data['id'], booking['id'])
+        wrong_email = self.client.post(url, {'ticketCode': booking['ticketCode'], 'email': 'x@x.com'}, format='json')
+        wrong_code = self.client.post(url, {'ticketCode': 'MV-000000', 'email': 'guest@x.com'}, format='json')
+        self.assertEqual(wrong_email.status_code, 404)
+        self.assertEqual(wrong_email.data, wrong_code.data)
+
+    def test_lookup_is_throttled(self):
+        from django.core.cache import cache
+        from rest_framework.throttling import ScopedRateThrottle
+        cache.clear()
+        self.addCleanup(cache.clear)
+        # Throttle rates are read once at import, so patch the class attribute
+        patcher = mock.patch.dict(ScopedRateThrottle.THROTTLE_RATES, {'ticket_lookup': '2/hour'})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        url = '/api/tickets/lookup/'
+        for _ in range(2):
+            self.client.post(url, {'ticketCode': 'MV-1', 'email': 'a@x.com'}, format='json')
+        self.assertEqual(self.client.post(url, {'ticketCode': 'MV-1', 'email': 'a@x.com'}, format='json').status_code, 429)
+
+    def test_check_in_by_organizer_only(self):
+        booking = self.book()
+        url = f'/api/gatherings/{self.event.id}/check-in/'
+
+        stranger = User.objects.create_user(username='s@x.com', email='s@x.com', password='pw-Stranger-1', role='curator')
+        self.client.force_authenticate(stranger)
+        self.assertEqual(self.client.post(url, {'ticket': booking['ticketCode']}, format='json').status_code, 403)
+
+        self.client.force_authenticate(self.organizer)
+        # Scanning the QR code sends the whole URL
+        res = self.client.post(url, {'ticket': booking['ticketUrl']}, format='json')
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.data['result'], 'checked_in')
+        again = self.client.post(url, {'ticket': booking['ticketCode'].lower()}, format='json')
+        self.assertEqual(again.data['result'], 'already_checked_in')
+        self.assertEqual(again.data['attendee']['checkedInAt'], res.data['attendee']['checkedInAt'])
+
+        other_event = Gathering.objects.get(id='sme-growth-summit')
+        self.client.force_authenticate(None)
+        other = self.book(event=other_event, tier=other_event.tiers.first())
+        self.client.force_authenticate(self.organizer)
+        wrong = self.client.post(url, {'ticket': other['id']}, format='json')
+        self.assertEqual(wrong.data['result'], 'wrong_event')
+        self.assertNotIn('attendee', wrong.data)
+        self.assertEqual(self.client.post(url, {'ticket': 'MV-999999'}, format='json').data['result'], 'not_found')
+
+        attendees = self.client.get(f'/api/gatherings/{self.event.id}/attendees/').data
+        self.assertEqual(attendees['counts'], {'bookings': 1, 'people': 2, 'checkedInBookings': 1, 'checkedInPeople': 2})
+        self.client.force_authenticate(stranger)
+        self.assertEqual(self.client.get(f'/api/gatherings/{self.event.id}/attendees/').status_code, 403)

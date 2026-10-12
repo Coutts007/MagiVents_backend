@@ -1,0 +1,20 @@
+{% autoescape off %}Hello {{ booking.attendee_name }},
+
+Your booking on MagiVents is confirmed.
+
+Event: {{ event.title }}
+Date & time: {{ event.date_display }}, {{ event.time_display }}
+Venue: {{ venue }}
+Ticket: {{ booking.tier_name }} ({{ people }})
+Ticket code: {{ booking.ticket_code }}
+Payment: {{ payment }}
+
+Your ticket is attached as a PDF. You can also open it here:
+{{ ticket_url }}
+
+At the entrance, show the QR code on your phone or a printed copy. Please arrive early to allow time for check-in.
+
+Need help? Email us at {{ contact_email }}.
+
+The MagiVents Team
+{% endautoescape %}

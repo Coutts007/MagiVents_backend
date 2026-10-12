@@ -41,6 +41,10 @@ from tickets.views import (
     BookmarkToggleView,
     PromoCodeViewSet,
     PromoValidateView,
+    TicketDetailView,
+    TicketLookupView,
+    TicketPdfView,
+    TicketResendView,
 )
 
 router = DefaultRouter()
@@ -76,6 +80,12 @@ urlpatterns = [
 
     # Promo code check at checkout (must come before the router's promo-codes/<pk>/ route)
     path('api/promo-codes/validate/', PromoValidateView.as_view(), name='promo_validate'),
+
+    # Tickets by booking UUID (QR code / email link), and guest lookup by code + email
+    path('api/tickets/lookup/', TicketLookupView.as_view(), name='ticket_lookup'),
+    path('api/tickets/<uuid:booking_id>/', TicketDetailView.as_view(), name='ticket_detail'),
+    path('api/tickets/<uuid:booking_id>/pdf/', TicketPdfView.as_view(), name='ticket_pdf'),
+    path('api/tickets/<uuid:booking_id>/resend/', TicketResendView.as_view(), name='ticket_resend'),
 
     # Gathering & Booking Resources
     path('api/', include(router.urls)),
