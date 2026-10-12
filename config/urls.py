@@ -34,6 +34,7 @@ from accounts.views import (
     RegisterView,
 )
 from core.views import PublicConfigView
+from payments.views import BookingPayView, BookingStatusView
 from gatherings.views import GatheringViewSet
 from tickets.views import (
     BookingViewSet,
@@ -80,6 +81,11 @@ urlpatterns = [
 
     # Promo code check at checkout (must come before the router's promo-codes/<pk>/ route)
     path('api/promo-codes/validate/', PromoValidateView.as_view(), name='promo_validate'),
+
+    # Paid booking lifecycle: guests poll by booking UUID, and retry without creating a new booking
+    path('api/bookings/<uuid:booking_id>/status/', BookingStatusView.as_view(), name='booking_status'),
+    path('api/bookings/<uuid:booking_id>/pay/', BookingPayView.as_view(), name='booking_pay'),
+    path('api/payments/', include('payments.urls')),
 
     # Tickets by booking UUID (QR code / email link), and guest lookup by code + email
     path('api/tickets/lookup/', TicketLookupView.as_view(), name='ticket_lookup'),

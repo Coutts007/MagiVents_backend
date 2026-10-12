@@ -1,3 +1,4 @@
+from django.test import override_settings
 import math
 
 from django.core.management import call_command
@@ -8,6 +9,8 @@ from gatherings.models import Gathering
 from tickets.models import Booking
 
 
+# Paid bookings confirm within the request when the simulated gateway has no delay (Phase 4)
+@override_settings(PAYMENTS_SIMULATED_DELAY_SECONDS=0)
 class BookingAndBookmarkTests(APITestCase):
     def setUp(self):
         call_command('seed_gatherings', verbosity=0)
@@ -100,6 +103,8 @@ from django.utils import timezone
 from tickets.models import PromoCode
 
 
+# Paid bookings confirm within the request when the simulated gateway has no delay (Phase 4)
+@override_settings(PAYMENTS_SIMULATED_DELAY_SECONDS=0)
 class PromoCodeTests(APITestCase):
     def setUp(self):
         call_command('seed_gatherings', verbosity=0)
@@ -185,7 +190,8 @@ from django.core import mail
 from django.test import override_settings
 
 
-@override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend', FRONTEND_URL='https://magivents.test')
+@override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend', FRONTEND_URL='https://magivents.test',
+                   PAYMENTS_SIMULATED_DELAY_SECONDS=0)
 class TicketDeliveryTests(APITestCase):
     def setUp(self):
         call_command('seed_gatherings', verbosity=0)

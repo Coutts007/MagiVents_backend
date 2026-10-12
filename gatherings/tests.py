@@ -1,3 +1,4 @@
+from django.test import override_settings
 import json
 from pathlib import Path
 
@@ -105,6 +106,8 @@ class GatheringApiTests(APITestCase):
         self.assertEqual(res.data['agenda'], agenda)
 
 
+# Paid bookings confirm within the request when the simulated gateway has no delay (Phase 4)
+@override_settings(PAYMENTS_SIMULATED_DELAY_SECONDS=0)
 class OrganizerStatsTests(APITestCase):
     def setUp(self):
         call_command('seed_gatherings', verbosity=0)
@@ -135,6 +138,8 @@ class OrganizerStatsTests(APITestCase):
                          {'revenue': 0.0, 'ticketsSold': 0})
 
 
+# Paid bookings confirm within the request when the simulated gateway has no delay (Phase 4)
+@override_settings(PAYMENTS_SIMULATED_DELAY_SECONDS=0)
 class TierEditorAndRoleTests(APITestCase):
     def setUp(self):
         self.curator = User.objects.create_user(username='c@x.com', email='c@x.com', password='pw-Curator-1',

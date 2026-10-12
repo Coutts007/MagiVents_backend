@@ -13,7 +13,11 @@ class PublicConfigView(APIView):
     authentication_classes = []
 
     def get(self, request):
+        from payments.providers import available_methods
         return Response({
-            'mpesaPaybill': settings.MPESA_PAYBILL_NUMBER,
+            'mpesaPaybill': settings.MPESA_C2B_SHORTCODE or settings.MPESA_PAYBILL_NUMBER,
             'mpesaAccountName': settings.MPESA_ACCOUNT_NAME,
+            'paymentsMode': settings.PAYMENTS_MODE,
+            'paymentMethods': available_methods(),
+            'paymentHoldMinutes': settings.PAYMENT_HOLD_MINUTES,
         })

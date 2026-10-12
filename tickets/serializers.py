@@ -1,12 +1,11 @@
-import random
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers
 
 from gatherings.models import Gathering, TicketTier
 from .documents import ticket_url
-from .emails import send_booking_confirmation
 from .models import Booking, PromoCode
 
 
@@ -15,11 +14,6 @@ def promo_discount(amount, percent_off):
     return (Decimal(amount) * Decimal(percent_off) / Decimal(100)).quantize(Decimal('1'), ROUND_HALF_UP)
 
 
-def generate_ticket_code():
-    while True:
-        code = f'MV-{random.randint(100000, 999999)}'
-        if not Booking.objects.filter(ticket_code=code).exists():
-            return code
 
 
 class BookingSerializer(serializers.ModelSerializer):
@@ -63,7 +57,10 @@ class BookingSerializer(serializers.ModelSerializer):
             'attendeeName': obj.attendee_name,
             'attendeeEmail': obj.attendee_email,
             'bookingDate': obj.booking_date.strftime('%b %d, %Y').replace(' 0', ' '),
-            'ticketCode': obj.ticket_code,
+            # Issued only once the booking is confirmed
+            'ticketCode': obj.ticket_code if obj.is_confirmed else None,
+            'status': obj.status,
+            'expiresAt': obj.expires_at.isoformat() if obj.status == 'pending' and obj.expires_at else None,
             'paymentMethod': obj.payment_method,
             'mpesaPhoneNumber': obj.mpesa_phone_number or None,
             'mpesaReceiptNumber': obj.mpesa_receipt_number or None,
@@ -72,7 +69,7 @@ class BookingSerializer(serializers.ModelSerializer):
             'totalInKes': float(obj.total_in_kes) if obj.total_in_kes is not None else None,
             'notes': obj.notes or None,
             # The QR code encodes this link, which carries the booking's UUID
-            'ticketUrl': ticket_url(obj),
+            'ticketUrl': ticket_url(obj) if obj.is_confirmed else None,
             'checkedInAt': obj.checked_in_at.isoformat() if obj.checked_in_at else None,
         }
 
@@ -81,6 +78,8 @@ class BookingSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def create(self, validated_data):
+        from payments.services import confirm_free_booking, hold_duration
+
         event_id = validated_data.pop('eventId')
         tier_id = validated_data.pop('tierId', '')
         promo = validated_data.pop('promoCode', '')
@@ -120,6 +119,7 @@ class BookingSerializer(serializers.ModelSerializer):
 
         base_total = unit_price * quantity
         discount = Decimal('0')
+        code = None
         if promo:
             code = PromoCode.lookup(promo, gathering)
             if code is None:
@@ -133,14 +133,17 @@ class BookingSerializer(serializers.ModelSerializer):
             code.save(update_fields=['use_count'])
 
         total = max(Decimal('0'), base_total - discount)
+        # Payment details come from the provider, never from the client
+        validated_data.pop('mpesa_receipt_number', None)
+        validated_data.pop('total_in_kes', None)
         if total == 0:
             # Free entry: nothing to pay, so payment details are not kept
-            validated_data.update(
-                payment_method='free', mpesa_phone_number='', mpesa_receipt_number='',
-                mpesa_mode='', total_in_kes=None,
-            )
+            validated_data.update(payment_method='free', mpesa_phone_number='', mpesa_mode='')
         else:
             validated_data['total_in_kes'] = total
+            validated_data.setdefault('payment_method', 'mpesa')
+            if validated_data['payment_method'] not in ('mpesa', 'card'):
+                raise serializers.ValidationError({'paymentMethod': 'Pay with M-Pesa or card.'})
 
         user = self.context['request'].user
         booking = Booking.objects.create(
@@ -153,7 +156,10 @@ class BookingSerializer(serializers.ModelSerializer):
             discount=discount,
             total_price=total,
             currency=gathering.currency,
-            ticket_code=generate_ticket_code(),
+            promo_code=code,
+            # Paid bookings hold their tickets until the payment confirms or the hold expires
+            status='pending' if total > 0 else 'confirmed',
+            expires_at=timezone.now() + hold_duration() if total > 0 else None,
             **validated_data,
         )
 
@@ -161,8 +167,9 @@ class BookingSerializer(serializers.ModelSerializer):
         if gathering.attendee_count >= gathering.capacity:
             gathering.status = 'sold_out'
         gathering.save(update_fields=['attendee_count', 'status'])
-        # Sent after the transaction commits; a failed email never fails the booking
-        transaction.on_commit(lambda: send_booking_confirmation(booking))
+        if total == 0:
+            # Ticket code and confirmation email (sent after commit; a failed email never fails the booking)
+            confirm_free_booking(booking)
         return booking
 
 

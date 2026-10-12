@@ -10,6 +10,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
+from payments.services import release_expired_holds
 from tickets.models import Booking
 from tickets.serializers import CheckInSerializer, attendee_row, normalize_ticket_code
 
@@ -54,14 +55,24 @@ class GatheringViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = Gathering.objects.prefetch_related('tiers', 'agenda_items').order_by('iso_date').annotate(
-            revenue_total=Sum('bookings__total_price'),
-            tickets_sold=Sum('bookings__quantity'),
+            # Sales count confirmed bookings only, not tickets held by unpaid ones
+            revenue_total=Sum('bookings__total_price', filter=Q(bookings__status='confirmed')),
+            tickets_sold=Sum('bookings__quantity', filter=Q(bookings__status='confirmed')),
         )
         # Drafts are only visible to their organizer
         visible = ~Q(status='draft')
         if self.request.user.is_authenticated:
             visible |= Q(organizer=self.request.user)
         return qs.filter(visible)
+
+    def list(self, request, *args, **kwargs):
+        # Availability is about to be read: give back tickets held by expired bookings first
+        release_expired_holds()
+        return super().list(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        release_expired_holds(kwargs.get('pk'))
+        return super().retrieve(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         serializer.save(organizer=self.request.user)
@@ -84,7 +95,7 @@ class GatheringViewSet(viewsets.ModelViewSet):
     def attendees(self, request, pk=None):
         """Every booking for the organizer's event, with check-in progress."""
         gathering = self._own_gathering()
-        bookings = list(gathering.bookings.order_by('attendee_name'))
+        bookings = list(gathering.bookings.filter(status='confirmed').order_by('attendee_name'))
         checked_in = [b for b in bookings if b.checked_in_at]
         return Response({
             'counts': {
@@ -112,6 +123,9 @@ class GatheringViewSet(viewsets.ModelViewSet):
             if booking.gathering_id != gathering.id:
                 # Say nothing about the other event's attendee
                 return Response({'result': 'wrong_event', 'message': 'This ticket is for a different event.'},
+                                status=status.HTTP_409_CONFLICT)
+            if booking.status != 'confirmed':
+                return Response({'result': 'not_paid', 'message': 'This booking has not been paid, so it has no ticket.'},
                                 status=status.HTTP_409_CONFLICT)
             if booking.checked_in_at:
                 return Response({'result': 'already_checked_in', 'message': 'This ticket was already checked in.',

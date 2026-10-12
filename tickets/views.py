@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.http import HttpResponse
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
@@ -39,8 +40,49 @@ class BookingViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixins.Retr
         return []
 
     def get_queryset(self):
-        # Users can only view their own bookings
-        return Booking.objects.filter(user=self.request.user).select_related('gathering')
+        # Users can only view their own bookings; "My tickets" lists confirmed ones
+        qs = Booking.objects.filter(user=self.request.user).select_related('gathering')
+        return qs.filter(status='confirmed') if self.action == 'list' else qs
+
+    def create(self, request, *args, **kwargs):
+        from payments.phone import normalize_kenyan_phone
+        from payments.serializers import booking_status_payload
+        from payments.services import PaymentError, refresh_payment, release_expired_holds, start_payment
+        from payments.providers import get_provider
+
+        # Expired holds give their tickets back before availability is checked
+        release_expired_holds(request.data.get('eventId'))
+
+        method = request.data.get('paymentMethod') or 'mpesa'
+        mode = request.data.get('mpesaMode') or 'stk'
+        phone = ''
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            booking = serializer.save()
+            if booking.status == 'pending':
+                # A booking that cannot even start its payment is rolled back, so no tickets stay held
+                try:
+                    provider = get_provider(method, mode)
+                    if not provider.is_configured():
+                        raise PaymentError(provider.not_configured_message)
+                    if method == 'mpesa' and mode == 'stk':
+                        phone = normalize_kenyan_phone(request.data.get('mpesaPhoneNumber', ''))
+                except (PaymentError, ValueError) as exc:
+                    transaction.set_rollback(True)
+                    return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        if booking.status == 'pending':
+            try:
+                payment = start_payment(booking, method, mode, phone)
+                if payment.provider == 'simulated':
+                    # The fake gateway may already be done (when no delay is configured)
+                    refresh_payment(payment)
+            except PaymentError:
+                pass  # The booking is marked failed; the payload says why and the attendee can retry
+            booking.refresh_from_db()
+        return Response(booking_status_payload(booking, request), status=status.HTTP_201_CREATED)
 
 
 @extend_schema(responses={200: {'type': 'array', 'items': {'type': 'string'}}})
@@ -122,7 +164,8 @@ def ticket_response(request, booking):
 
 
 def find_ticket(booking_id):
-    return Booking.objects.select_related('gathering').filter(id=str(booking_id)).first()
+    # A ticket exists only once the booking is confirmed (paid, or free)
+    return Booking.objects.select_related('gathering').filter(id=str(booking_id), status='confirmed').first()
 
 
 @extend_schema(responses=BookingSerializer)
@@ -182,7 +225,7 @@ class TicketLookupView(APIView):
         code = normalize_ticket_code(serializer.validated_data['ticketCode'])
         email = serializer.validated_data['email'].strip()
         booking = Booking.objects.select_related('gathering').filter(
-            ticket_code=code, attendee_email__iexact=email
+            ticket_code=code, attendee_email__iexact=email, status='confirmed'
         ).first()
         if booking is None:
             # The same answer whether the code or the email was wrong

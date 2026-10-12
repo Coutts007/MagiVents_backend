@@ -135,7 +135,7 @@ class GatheringSerializer(serializers.Serializer):
         if hasattr(obj, 'revenue_total'):
             revenue, tickets = obj.revenue_total, obj.tickets_sold
         else:
-            totals = obj.bookings.aggregate(revenue=Sum('total_price'), tickets=Sum('quantity'))
+            totals = obj.bookings.filter(status='confirmed').aggregate(revenue=Sum('total_price'), tickets=Sum('quantity'))
             revenue, tickets = totals['revenue'], totals['tickets']
         return {'revenue': float(revenue or 0), 'ticketsSold': int(tickets or 0)}
 

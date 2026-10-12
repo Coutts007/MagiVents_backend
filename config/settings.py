@@ -13,6 +13,8 @@ import os
 from pathlib import Path
 from datetime import timedelta
 
+from django.core.exceptions import ImproperlyConfigured
+
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -56,6 +58,7 @@ INSTALLED_APPS = [
    'accounts',
    'gatherings',
    'tickets',
+   'payments',
 
 ]
 
@@ -89,6 +92,7 @@ REST_FRAMEWORK = {
         'promo_validate': os.environ.get('PROMO_VALIDATE_RATE', '30/minute'),
         'ticket_lookup': os.environ.get('TICKET_LOOKUP_RATE', '10/hour'),
         'ticket_resend': os.environ.get('TICKET_RESEND_RATE', '5/hour'),
+        'payment_attempts': os.environ.get('PAYMENT_ATTEMPT_RATE', '20/hour'),
     },
 }
 
@@ -109,6 +113,43 @@ SPECTACULAR_SETTINGS = {
 # business number: set your own Paybill or Till before taking real payments.
 MPESA_PAYBILL_NUMBER = os.environ.get('MPESA_PAYBILL_NUMBER', '000000')
 MPESA_ACCOUNT_NAME = os.environ.get('MPESA_ACCOUNT_NAME', 'MagiVents')
+
+# Payments. `simulated` (default) runs the full pending -> confirmed lifecycle with a fake gateway and no
+# credentials; `live` uses Safaricom Daraja for M-Pesa and Paystack for cards.
+PAYMENTS_MODE = os.environ.get('PAYMENTS_MODE', 'simulated')
+if PAYMENTS_MODE not in ('simulated', 'live'):
+    raise ImproperlyConfigured("PAYMENTS_MODE must be 'simulated' or 'live'.")
+# How long a pending booking holds its tickets
+PAYMENT_HOLD_MINUTES = int(os.environ.get('PAYMENT_HOLD_MINUTES', '10'))
+# Seconds the simulated gateway takes to "complete" a payment (0 confirms at once)
+PAYMENTS_SIMULATED_DELAY_SECONDS = int(os.environ.get('PAYMENTS_SIMULATED_DELAY_SECONDS', '6'))
+# Public HTTPS address of this API, used to build the callback URLs given to Daraja and Paystack
+PUBLIC_API_URL = os.environ.get('PUBLIC_API_URL', 'http://localhost:8000')
+# Unguessable path segment for callbacks that providers do not sign (Daraja)
+PAYMENT_CALLBACK_SECRET = os.environ.get('PAYMENT_CALLBACK_SECRET', '')
+
+# Safaricom Daraja (M-Pesa). Sandbox by default.
+MPESA_ENVIRONMENT = os.environ.get('MPESA_ENVIRONMENT', 'sandbox')
+MPESA_CONSUMER_KEY = os.environ.get('MPESA_CONSUMER_KEY', '')
+MPESA_CONSUMER_SECRET = os.environ.get('MPESA_CONSUMER_SECRET', '')
+# Shortcode and passkey for STK Push (Lipa na M-Pesa Online)
+MPESA_STK_SHORTCODE = os.environ.get('MPESA_STK_SHORTCODE', '')
+MPESA_PASSKEY = os.environ.get('MPESA_PASSKEY', '')
+# CustomerPayBillOnline for a Paybill, CustomerBuyGoodsOnline for a Till
+MPESA_STK_TRANSACTION_TYPE = os.environ.get('MPESA_STK_TRANSACTION_TYPE', 'CustomerPayBillOnline')
+# For a Till, PartyB is the till number while the shortcode above is the store number
+MPESA_STK_PARTY_B = os.environ.get('MPESA_STK_PARTY_B', '')
+# Paybill used for manual (C2B) payments; matched on the account number
+MPESA_C2B_SHORTCODE = os.environ.get('MPESA_C2B_SHORTCODE', '')
+
+# Only accept Daraja callbacks from these IPs (comma separated). Leave empty in sandbox; in production use
+# Safaricom's published list (see payments/providers/daraja.py SAFARICOM_CALLBACK_IPS).
+DARAJA_ALLOWED_IPS = [ip.strip() for ip in os.environ.get('DARAJA_ALLOWED_IPS', '').split(',') if ip.strip()]
+# True when a reverse proxy sets X-Forwarded-For (used to read the caller's IP)
+BEHIND_PROXY = os.environ.get('BEHIND_PROXY', 'False') == 'True'
+
+# Paystack (cards). Use a test key (sk_test_...) until going live.
+PAYSTACK_SECRET_KEY = os.environ.get('PAYSTACK_SECRET_KEY', '')
 
 # CORS Configuration (allows Vite frontend dev server and production URLs)
 CORS_ALLOW_ALL_ORIGINS = DEBUG

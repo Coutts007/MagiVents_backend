@@ -6,6 +6,12 @@ from django.conf import settings
 from gatherings.models import Gathering, TicketTier
 
 class Booking(models.Model):
+    STATUS_CHOICES = (
+        ('pending', 'Pending payment'),
+        ('confirmed', 'Confirmed'),
+        ('failed', 'Payment failed'),
+        ('expired', 'Expired'),
+    )
     PAYMENT_CHOICES = (
         ('mpesa', 'M-Pesa'),
         ('card', 'Credit / Debit Card'),
@@ -25,8 +31,16 @@ class Booking(models.Model):
 
     attendee_name = models.CharField(max_length=120)
     attendee_email = models.EmailField()
-    ticket_code = models.CharField(max_length=60, unique=True)
+    # Issued only once the booking is confirmed
+    ticket_code = models.CharField(max_length=60, unique=True, null=True, blank=True)
     booking_date = models.DateTimeField(auto_now_add=True)
+
+    # Paid bookings hold their tickets while pending; free bookings are confirmed at once
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='confirmed', db_index=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    # True while the booking's tickets count against tier availability and event capacity
+    holds_tickets = models.BooleanField(default=True)
 
     payment_method = models.CharField(max_length=20, choices=PAYMENT_CHOICES, default='card')
     mpesa_phone_number = models.CharField(max_length=30, blank=True, default='')
@@ -36,6 +50,8 @@ class Booking(models.Model):
     currency = models.CharField(max_length=10, default='KES')
     discount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     notes = models.TextField(blank=True, default='')
+    promo_code = models.ForeignKey('tickets.PromoCode', on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name='bookings')
 
     checked_in_at = models.DateTimeField(null=True, blank=True)
     checked_in_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
@@ -44,8 +60,12 @@ class Booking(models.Model):
     class Meta:
         ordering = ['-booking_date']
 
+    @property
+    def is_confirmed(self):
+        return self.status == 'confirmed'
+
     def __str__(self):
-        return f"{self.ticket_code} - {self.gathering.title}"
+        return f"{self.ticket_code or self.status} - {self.gathering.title}"
 
 
 class PromoCode(models.Model):
