@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     # Third party
     'rest_framework',
     'rest_framework_simplejwt',
+    'drf_spectacular',
     # App modules
    'core',
    'accounts',
@@ -82,6 +83,7 @@ REST_FRAMEWORK = {
     ),
     # Frontend expects prices as numbers, not strings
     'COERCE_DECIMAL_TO_STRING': False,
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_THROTTLE_RATES': {
         'guest_bookings': os.environ.get('GUEST_BOOKING_RATE', '20/hour'),
     },
@@ -92,6 +94,18 @@ SIMPLE_JWT = {
     'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'MagiVents API',
+    'DESCRIPTION': 'Event discovery, ticketing and payments for MagiVents Kenya.',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+}
+
+# M-Pesa Paybill shown to attendees who pay manually. The default is a placeholder, not a real
+# business number: set your own Paybill or Till before taking real payments.
+MPESA_PAYBILL_NUMBER = os.environ.get('MPESA_PAYBILL_NUMBER', '000000')
+MPESA_ACCOUNT_NAME = os.environ.get('MPESA_ACCOUNT_NAME', 'MagiVents')
 
 # CORS Configuration (allows Vite frontend dev server and production URLs)
 CORS_ALLOW_ALL_ORIGINS = DEBUG

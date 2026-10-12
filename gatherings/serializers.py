@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.db.models import Sum
 from rest_framework import serializers
 
 from core.images import absolute_media_url, data_url_to_file, is_data_url
@@ -107,6 +108,19 @@ class GatheringSerializer(serializers.Serializer):
             return absolute_media_url(self.context.get('request'), obj.artwork_image)
         return obj.artwork_url
 
+    def _organizer_stats(self, obj):
+        """Sales figures from real bookings, shown only to the event's organizer."""
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated or obj.organizer_id != request.user.id:
+            return None
+        # The list/detail queryset annotates these; freshly saved instances are aggregated here
+        if hasattr(obj, 'revenue_total'):
+            revenue, tickets = obj.revenue_total, obj.tickets_sold
+        else:
+            totals = obj.bookings.aggregate(revenue=Sum('total_price'), tickets=Sum('quantity'))
+            revenue, tickets = totals['revenue'], totals['tickets']
+        return {'revenue': float(revenue or 0), 'ticketsSold': int(tickets or 0)}
+
     def to_representation(self, obj):
         return {
             'id': str(obj.id),
@@ -164,6 +178,7 @@ class GatheringSerializer(serializers.Serializer):
             'tags': obj.tags,
             'curatorNote': obj.curator_note,
             'createdAt': obj.created_at.isoformat() if obj.created_at else None,
+            'organizerStats': self._organizer_stats(obj),
         }
 
     # --- writing -------------------------------------------------------------

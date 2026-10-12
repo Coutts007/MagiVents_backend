@@ -101,3 +101,33 @@ class GatheringApiTests(APITestCase):
         agenda = [{'time': '09:00', 'title': 'Opening', 'detail': ''}, {'time': '10:00', 'title': 'Panel', 'detail': 'Q&A'}]
         res = self.client.post('/api/gatherings/', event_payload(agenda=agenda), format='json')
         self.assertEqual(res.data['agenda'], agenda)
+
+
+class OrganizerStatsTests(APITestCase):
+    def setUp(self):
+        call_command('seed_gatherings', verbosity=0)
+        self.organizer = User.objects.get(email='curator@magivents.local')
+        self.event = Gathering.objects.get(id='nairobi-sounds-live')
+        self.tier = self.event.tiers.first()
+
+    def test_revenue_comes_from_bookings_and_is_private(self):
+        buyer = User.objects.create_user(username='b@x.com', email='b@x.com', password='pw-Buyer-123')
+        self.client.force_authenticate(buyer)
+        res = self.client.post('/api/bookings/', {
+            'eventId': self.event.id, 'tierId': str(self.tier.id), 'quantity': 2,
+            'attendeeName': 'B', 'attendeeEmail': 'b@x.com', 'paymentMethod': 'card',
+        }, format='json')
+        self.assertEqual(res.status_code, 201, res.data)
+        paid = res.data['totalPrice']
+
+        # Other users never see sales figures
+        self.assertIsNone(self.client.get(f'/api/gatherings/{self.event.id}/').data['organizerStats'])
+
+        self.client.force_authenticate(self.organizer)
+        stats = self.client.get(f'/api/gatherings/{self.event.id}/').data['organizerStats']
+        self.assertEqual(stats, {'revenue': paid, 'ticketsSold': 2})
+        listed = next(e for e in self.client.get('/api/gatherings/').data if e['id'] == self.event.id)
+        self.assertEqual(listed['organizerStats'], stats)
+        empty = Gathering.objects.filter(organizer=self.organizer).exclude(id=self.event.id).first()
+        self.assertEqual(self.client.get(f'/api/gatherings/{empty.id}/').data['organizerStats'],
+                         {'revenue': 0.0, 'ticketsSold': 0})

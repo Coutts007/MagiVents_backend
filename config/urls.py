@@ -19,6 +19,7 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
@@ -31,6 +32,7 @@ from accounts.views import (
     ProfileView,
     RegisterView,
 )
+from core.views import PublicConfigView
 from gatherings.views import GatheringViewSet
 from tickets.views import BookingViewSet, BookmarkListView, BookmarkToggleView
 
@@ -57,6 +59,11 @@ urlpatterns = [
     # Bookmarks
     path('api/bookmarks/', BookmarkListView.as_view(), name='bookmark_list'),
     path('api/bookmarks/toggle/<str:gathering_id>/', BookmarkToggleView.as_view(), name='bookmark_toggle'),
+
+    # Public configuration and API documentation
+    path('api/config/', PublicConfigView.as_view(), name='public_config'),
+    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger_ui'),
 
     # Gathering & Booking Resources
     path('api/', include(router.urls)),

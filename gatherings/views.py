@@ -1,4 +1,4 @@
-from django.db.models import Q
+from django.db.models import Q, Sum
 from rest_framework import filters, permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -23,7 +23,10 @@ class GatheringViewSet(viewsets.ModelViewSet):
     search_fields = ['title', 'subtitle', 'category', 'venue_name', 'venue_city', 'host_name', 'tags']
 
     def get_queryset(self):
-        qs = Gathering.objects.prefetch_related('tiers', 'agenda_items').order_by('iso_date')
+        qs = Gathering.objects.prefetch_related('tiers', 'agenda_items').order_by('iso_date').annotate(
+            revenue_total=Sum('bookings__total_price'),
+            tickets_sold=Sum('bookings__quantity'),
+        )
         # Drafts are only visible to their organizer
         visible = ~Q(status='draft')
         if self.request.user.is_authenticated:
