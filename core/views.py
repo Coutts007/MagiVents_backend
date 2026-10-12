@@ -21,3 +21,24 @@ class PublicConfigView(APIView):
             'paymentMethods': available_methods(),
             'paymentHoldMinutes': settings.PAYMENT_HOLD_MINUTES,
         })
+
+
+@extend_schema(responses=OpenApiTypes.OBJECT)
+class GeocodeView(APIView):
+    """Finds coordinates for a venue address (OpenStreetMap Nominatim, cached). Organizers only."""
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = 'geocode'
+
+    def get_throttles(self):
+        from rest_framework.throttling import ScopedRateThrottle
+        return [ScopedRateThrottle()]
+
+    def get(self, request):
+        from .geocoding import GeocodingError, search_places
+        query = request.query_params.get('q', '').strip()
+        if len(query) < 3:
+            return Response({'error': 'Type at least 3 characters of the address.'}, status=400)
+        try:
+            return Response({'results': search_places(query)})
+        except GeocodingError as exc:
+            return Response({'error': str(exc)}, status=503)

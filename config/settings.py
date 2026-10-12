@@ -93,6 +93,7 @@ REST_FRAMEWORK = {
         'ticket_lookup': os.environ.get('TICKET_LOOKUP_RATE', '10/hour'),
         'ticket_resend': os.environ.get('TICKET_RESEND_RATE', '5/hour'),
         'payment_attempts': os.environ.get('PAYMENT_ATTEMPT_RATE', '20/hour'),
+        'geocode': os.environ.get('GEOCODE_RATE', '30/hour'),
     },
 }
 
@@ -150,6 +151,10 @@ BEHIND_PROXY = os.environ.get('BEHIND_PROXY', 'False') == 'True'
 
 # Paystack (cards). Use a test key (sk_test_...) until going live.
 PAYSTACK_SECRET_KEY = os.environ.get('PAYSTACK_SECRET_KEY', '')
+
+# Address search for the event map (OpenStreetMap Nominatim by default; respect its usage policy)
+GEOCODER_URL = os.environ.get('GEOCODER_URL', 'https://nominatim.openstreetmap.org/search')
+GEOCODER_USER_AGENT = os.environ.get('GEOCODER_USER_AGENT', 'MagiVents/1.0 (magiventskenya@gmail.com)')
 
 # CORS Configuration (allows Vite frontend dev server and production URLs)
 CORS_ALLOW_ALL_ORIGINS = DEBUG

@@ -33,7 +33,7 @@ from accounts.views import (
     ProfileView,
     RegisterView,
 )
-from core.views import PublicConfigView
+from core.views import GeocodeView, PublicConfigView
 from payments.views import BookingPayView, BookingStatusView
 from gatherings.views import GatheringViewSet
 from tickets.views import (
@@ -76,6 +76,7 @@ urlpatterns = [
 
     # Public configuration and API documentation
     path('api/config/', PublicConfigView.as_view(), name='public_config'),
+    path('api/geocode/', GeocodeView.as_view(), name='geocode'),
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger_ui'),
 
