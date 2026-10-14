@@ -1,7 +1,7 @@
 import re
 
 from django.db import transaction
-from django.db.models import Q, Sum
+from django.db.models import F, Q, Sum
 from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
@@ -62,6 +62,9 @@ class GatheringViewSet(viewsets.ModelViewSet):
             # Sales count confirmed bookings only, not tickets held by unpaid ones
             revenue_total=Sum('bookings__total_price', filter=Q(bookings__status='confirmed')),
             tickets_sold=Sum('bookings__quantity', filter=Q(bookings__status='confirmed')),
+            # A couple or group ticket admits several people
+            people_confirmed=Sum(F('bookings__quantity') * F('bookings__admits_per_ticket'),
+                                 filter=Q(bookings__status='confirmed')),
         )
         # Drafts are only visible to their organizer
         visible = ~Q(status='draft')
@@ -104,9 +107,9 @@ class GatheringViewSet(viewsets.ModelViewSet):
         return Response({
             'counts': {
                 'bookings': len(bookings),
-                'people': sum(b.quantity for b in bookings),
+                'people': sum(b.people for b in bookings),
                 'checkedInBookings': len(checked_in),
-                'checkedInPeople': sum(b.quantity for b in checked_in),
+                'checkedInPeople': sum(b.people for b in checked_in),
             },
             'attendees': [attendee_row(b) for b in bookings],
         })

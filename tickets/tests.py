@@ -301,3 +301,199 @@ class TicketDeliveryTests(APITestCase):
         self.assertEqual(attendees['counts'], {'bookings': 1, 'people': 2, 'checkedInBookings': 1, 'checkedInPeople': 2})
         self.client.force_authenticate(stranger)
         self.assertEqual(self.client.get(f'/api/gatherings/{self.event.id}/attendees/').status_code, 403)
+
+
+# --- Ticket types: couple and group tickets, flash sales, sales windows -------------------------------
+from datetime import datetime, timedelta, timezone as dt_timezone
+from unittest import mock
+
+from gatherings.models import TicketTier
+from gatherings.tests import event_payload
+from tickets.models import PromoCode
+
+T0 = datetime(2030, 3, 1, 9, 0, tzinfo=dt_timezone.utc)
+
+
+@override_settings(PAYMENTS_SIMULATED_DELAY_SECONDS=0)
+class TierTypeBookingTests(APITestCase):
+    def setUp(self):
+        self.organizer = User.objects.create_user(username='o@x.com', email='o@x.com', password='pw-Org-12345',
+                                                  role='curator')
+        self.client.force_authenticate(self.organizer)
+        payload = event_payload(isFree=False)
+        payload['pricing'] = {'currency': 'KES', 'startingPrice': 1, 'tiers': [
+            {'name': 'Regular', 'price': 1000, 'quantity': 20},
+            {'name': 'Couple', 'price': 1800, 'quantity': 10, 'admits': 2},
+            {'name': 'Group of 5', 'price': 4000, 'quantity': 2, 'admits': 5},
+            {'name': 'VIP', 'price': 3000, 'quantity': 10, 'salePrice': 2000,
+             'saleStartsAt': T0.isoformat(), 'saleEndsAt': (T0 + timedelta(hours=2)).isoformat(), 'saleQuantity': 3},
+            {'name': 'Early Bird', 'price': 800, 'quantity': 10,
+             'onSaleFrom': T0.isoformat(), 'onSaleUntil': (T0 + timedelta(days=1)).isoformat()},
+        ]}
+        res = self.client.post('/api/gatherings/', payload, format='json')
+        self.assertEqual(res.status_code, 201, res.data)
+        self.event_id = res.data['id']
+        # Publishing rules are tested elsewhere; here the event just needs to be on sale
+        Gathering.objects.filter(id=self.event_id).update(status='published')
+        self.tiers = {t.name: t for t in TicketTier.objects.filter(gathering_id=self.event_id)}
+        self.client.force_authenticate(None)
+
+    def book(self, tier, quantity=1, at=T0 + timedelta(minutes=30), **extra):
+        payload = {'eventId': self.event_id, 'tierId': str(self.tiers[tier].id), 'quantity': quantity,
+                   'attendeeName': 'Guest', 'attendeeEmail': 'guest@x.com', 'paymentMethod': 'mpesa',
+                   'mpesaPhoneNumber': '0712345678', 'totalInKes': 1, **extra}
+        with mock.patch('django.utils.timezone.now', return_value=at):
+            return self.client.post('/api/bookings/', payload, format='json')
+
+    def event(self):
+        return Gathering.objects.get(id=self.event_id)
+
+    def test_capacity_counts_people_not_tickets(self):
+        # 20×1 + 10×2 + 2×5 + 10×1 + 10×1
+        self.assertEqual(self.event().capacity, 70)
+
+    def test_couple_ticket_admits_two_at_one_price(self):
+        res = self.book('Couple')
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertEqual((res.data['unitPrice'], res.data['totalPrice']), (1800.0, 1800.0))
+        self.assertEqual((res.data['quantity'], res.data['admits'], res.data['admitsPerTicket']), (1, 2, 2))
+        self.assertEqual(res.data['status'], 'confirmed')
+        self.assertEqual(self.event().attendee_count, 2)
+        self.tiers['Couple'].refresh_from_db()
+        self.assertEqual(self.tiers['Couple'].available, 9)
+
+        # The booking keeps what it was sold as, even if the tier changes later
+        TicketTier.objects.filter(pk=self.tiers['Couple'].pk).update(price=5000)
+        ticket = self.client.get(f"/api/tickets/{res.data['id']}/").data
+        self.assertEqual((ticket['unitPrice'], ticket['admits']), (1800.0, 2))
+
+    def test_group_tickets_and_the_last_one(self):
+        res = self.book('Group of 5', quantity=2)
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertEqual((res.data['totalPrice'], res.data['admits']), (8000.0, 10))
+        self.assertEqual(self.event().attendee_count, 10)
+        res = self.book('Group of 5')
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(self.event().attendee_count, 10)
+
+    def test_last_place_is_not_oversold_by_a_group_ticket(self):
+        # Only 3 places left in the event: a group ticket for 5 must be refused even though the tier has stock
+        Gathering.objects.filter(id=self.event_id).update(attendee_count=67)
+        res = self.book('Group of 5')
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('Only 3 places remain', str(res.data))
+        self.assertEqual(self.book('Couple').status_code, 201)
+        self.assertEqual(self.event().attendee_count, 69)
+
+    def test_flash_sale_price_and_its_boundaries(self):
+        start, end = T0, T0 + timedelta(hours=2)
+        before = self.book('VIP', at=start - timedelta(seconds=1))
+        at_start = self.book('VIP', at=start)
+        at_end = self.book('VIP', at=end)
+        self.assertEqual(before.data['unitPrice'], 3000.0)
+        self.assertEqual((at_start.data['unitPrice'], at_start.data['isSalePrice']), (2000.0, True))
+        self.assertEqual((at_end.data['unitPrice'], at_end.data['isSalePrice']), (3000.0, False))
+        self.tiers['VIP'].refresh_from_db()
+        self.assertEqual(self.tiers['VIP'].sale_sold, 1)
+
+    def test_flash_sale_limit_and_the_last_sale_ticket(self):
+        self.assertEqual(self.book('VIP', quantity=2).data['totalPrice'], 4000.0)
+        # One left at the sale price: asking for two is refused rather than charging a mix of prices
+        res = self.book('VIP', quantity=2)
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('Only 1', str(res.data))
+        last = self.book('VIP')
+        self.assertEqual((last.data['unitPrice'], last.data['isSalePrice']), (2000.0, True))
+        # The allowance is used up: the normal price is back, still during the sale window
+        after = self.book('VIP')
+        self.assertEqual((after.data['unitPrice'], after.data['isSalePrice']), (3000.0, False))
+        public = self.client.get(f'/api/gatherings/{self.event_id}/').data
+        vip = next(t for t in public['pricing']['tiers'] if t['name'] == 'VIP')
+        self.assertEqual((vip['saleRemaining'], vip['saleQuantity']), (0, 3))
+
+    @override_settings(PAYMENTS_SIMULATED_DELAY_SECONDS=600)
+    def test_failed_payment_returns_the_sale_ticket_and_the_places(self):
+        res = self.book('VIP', quantity=3, mpesaPhoneNumber='0712341032')
+        self.assertEqual(res.data['status'], 'pending')
+        self.tiers['VIP'].refresh_from_db()
+        self.assertEqual(self.tiers['VIP'].sale_sold, 3)
+        from payments.models import Payment
+        from payments.services import record_failure
+        record_failure(Payment.objects.get(booking_id=res.data['id']).id, 'Cancelled')
+        self.tiers['VIP'].refresh_from_db()
+        self.assertEqual((self.tiers['VIP'].sale_sold, self.tiers['VIP'].available), (0, 10))
+        self.assertEqual(self.event().attendee_count, 0)
+
+    def test_promo_code_applies_on_top_of_the_sale_price(self):
+        PromoCode.objects.create(code='HALF', percent_off=50, gathering_id=self.event_id)
+        res = self.book('VIP', promoCode='half')
+        self.assertEqual((res.data['unitPrice'], res.data['totalPrice']), (2000.0, 1000.0))
+        with mock.patch('django.utils.timezone.now', return_value=T0 + timedelta(minutes=5)):
+            check = self.client.post('/api/promo-codes/validate/', {
+                'code': 'HALF', 'eventId': self.event_id, 'tierId': str(self.tiers['VIP'].id), 'quantity': 1},
+                format='json')
+        self.assertEqual((check.data['subtotal'], check.data['total']), (2000.0, 1000.0))
+
+    def test_sales_window_opens_and_closes_the_tier(self):
+        self.assertEqual(self.book('Early Bird', at=T0 - timedelta(minutes=1)).status_code, 400)
+        self.assertEqual(self.book('Early Bird', at=T0).status_code, 201)
+        closed = self.book('Early Bird', at=T0 + timedelta(days=1))
+        self.assertEqual(closed.status_code, 400)
+        self.assertIn('closed', str(closed.data))
+
+    def test_public_tier_payload_shows_the_price_in_effect(self):
+        with mock.patch('django.utils.timezone.now', return_value=T0 + timedelta(minutes=1)):
+            tiers = self.client.get(f'/api/gatherings/{self.event_id}/').data['pricing']['tiers']
+        vip = next(t for t in tiers if t['name'] == 'VIP')
+        self.assertEqual((vip['price'], vip['salePrice'], vip['currentPrice'], vip['saleActive']),
+                         (3000.0, 2000.0, 2000.0, True))
+        self.assertEqual(vip['saleEndsAt'], (T0 + timedelta(hours=2)).isoformat())
+        couple = next(t for t in tiers if t['name'] == 'Couple')
+        self.assertEqual((couple['admits'], couple['saleActive'], couple['salesState']), (2, False, 'on_sale'))
+
+
+class TierValidationTests(APITestCase):
+    def setUp(self):
+        self.organizer = User.objects.create_user(username='v@x.com', email='v@x.com', password='pw-Val-12345',
+                                                  role='curator')
+        self.client.force_authenticate(self.organizer)
+
+    def create(self, **tier):
+        payload = event_payload(isFree=False)
+        payload['pricing'] = {'currency': 'KES', 'startingPrice': 1, 'tiers': [{'name': 'VIP', 'price': 3000,
+                                                                               'quantity': 10, **tier}]}
+        return self.client.post('/api/gatherings/', payload, format='json')
+
+    def test_sale_rules(self):
+        times = {'saleStartsAt': T0.isoformat(), 'saleEndsAt': (T0 + timedelta(hours=1)).isoformat()}
+        self.assertEqual(self.create(salePrice=3000, **times).status_code, 400)       # not lower than the price
+        self.assertEqual(self.create(salePrice=1000).status_code, 400)                 # no times
+        self.assertEqual(self.create(salePrice=1000, saleStartsAt=times['saleEndsAt'],
+                                     saleEndsAt=times['saleStartsAt']).status_code, 400)  # ends before it starts
+        self.assertEqual(self.create(salePrice=1000, saleQuantity=11, **times).status_code, 400)  # over quantity
+        self.assertEqual(self.create(salePrice=1000, saleQuantity=5, **times).status_code, 201)
+        self.assertEqual(self.create(admits=0).status_code, 400)
+
+    def test_free_event_clears_prices_and_sales(self):
+        payload = event_payload(isFree=True)
+        payload['pricing'] = {'currency': 'KES', 'startingPrice': 0, 'tiers': [{'name': 'Couple', 'price': 0,
+                                                                               'quantity': 5, 'admits': 2}]}
+        res = self.client.post('/api/gatherings/', payload, format='json')
+        self.assertEqual(res.status_code, 201, res.data)
+        tier = res.data['pricing']['tiers'][0]
+        self.assertEqual((tier['price'], tier['salePrice'], tier['admits']), (0.0, None, 2))
+        self.assertEqual(res.data['capacity'], 10)
+
+    @override_settings(PAYMENTS_SIMULATED_DELAY_SECONDS=0)
+    def test_admits_cannot_change_once_sold(self):
+        res = self.create(admits=2)
+        gid = res.data['id']
+        Gathering.objects.filter(id=gid).update(status='published')
+        tier_id = res.data['pricing']['tiers'][0]['id']
+        self.client.post('/api/bookings/', {'eventId': gid, 'tierId': tier_id, 'quantity': 1, 'attendeeName': 'A',
+                                            'attendeeEmail': 'a@x.com', 'paymentMethod': 'card'}, format='json')
+        event = self.client.get(f'/api/gatherings/{gid}/').data
+        event['pricing']['tiers'][0]['admits'] = 3
+        self.assertEqual(self.client.put(f'/api/gatherings/{gid}/', event, format='json').status_code, 400)
+        event['pricing']['tiers'][0]['admits'] = 2
+        self.assertEqual(self.client.put(f'/api/gatherings/{gid}/', event, format='json').status_code, 200)

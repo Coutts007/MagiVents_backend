@@ -1,5 +1,6 @@
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import F, Sum
+from django.utils import timezone
 from rest_framework import serializers
 
 from core.images import absolute_media_url, data_url_to_file, is_data_url
@@ -13,11 +14,74 @@ class TicketTierSerializer(serializers.ModelSerializer):
     perks = serializers.ListField(child=serializers.CharField(allow_blank=True), required=False)
     # Total tickets of this type. Older clients send only `available` (tickets left), which still works.
     quantity = serializers.IntegerField(min_value=0, required=False)
+    # People one ticket admits: 1 by default, 2 for a couple, the group size for a group ticket
+    admits = serializers.IntegerField(min_value=1, max_value=TicketTier.MAX_ADMITS, required=False)
+    # Flash sale (times are ISO 8601; stored in UTC)
+    salePrice = serializers.DecimalField(source='sale_price', max_digits=10, decimal_places=2, min_value=1,
+                                         required=False, allow_null=True)
+    saleStartsAt = serializers.DateTimeField(source='sale_starts_at', required=False, allow_null=True)
+    saleEndsAt = serializers.DateTimeField(source='sale_ends_at', required=False, allow_null=True)
+    saleQuantity = serializers.IntegerField(source='sale_quantity', min_value=1, required=False, allow_null=True)
+    # The tier's own sales window
+    onSaleFrom = serializers.DateTimeField(source='on_sale_from', required=False, allow_null=True)
+    onSaleUntil = serializers.DateTimeField(source='on_sale_until', required=False, allow_null=True)
 
     class Meta:
         model = TicketTier
-        fields = ['id', 'name', 'price', 'description', 'quantity', 'available', 'perks']
+        fields = ['id', 'name', 'price', 'description', 'quantity', 'available', 'perks', 'admits',
+                  'salePrice', 'saleStartsAt', 'saleEndsAt', 'saleQuantity', 'onSaleFrom', 'onSaleUntil']
         extra_kwargs = {'description': {'required': False, 'allow_blank': True}, 'available': {'required': False}}
+
+    def validate(self, attrs):
+        name = attrs.get('name') or 'This ticket type'
+        if attrs.get('sale_price') is not None:
+            start, end = attrs.get('sale_starts_at'), attrs.get('sale_ends_at')
+            if not start or not end:
+                raise serializers.ValidationError(f'"{name}": a flash sale needs a start and an end time.')
+            if end <= start:
+                raise serializers.ValidationError(f'"{name}": the flash sale must end after it starts.')
+            if attrs['sale_price'] != attrs['sale_price'].to_integral_value():
+                raise serializers.ValidationError(f'"{name}": the sale price must be whole shillings.')
+            if attrs['sale_price'] >= attrs['price']:
+                raise serializers.ValidationError(f'"{name}": the sale price must be lower than the normal price.')
+            limit, quantity = attrs.get('sale_quantity'), attrs.get('quantity')
+            if limit is not None and quantity is not None and limit > quantity:
+                raise serializers.ValidationError(f'"{name}": the sale limit cannot be more than the tickets available.')
+        elif 'sale_price' in attrs:
+            # Removing the sale price ends the sale
+            attrs.update(sale_price=None, sale_starts_at=None, sale_ends_at=None, sale_quantity=None)
+        start, end = attrs.get('on_sale_from'), attrs.get('on_sale_until')
+        if start and end and end <= start:
+            raise serializers.ValidationError(f'"{name}": sales must close after they open.')
+        return attrs
+
+
+def tier_payload(tier, now=None):
+    """A tier as the frontend's TicketTier type. Prices in effect are decided here, never by the client."""
+    now = now or timezone.now()
+    current_price, on_sale = tier.price_at(now)
+    iso = lambda value: value.isoformat() if value else None  # noqa: E731
+    return {
+        'id': str(tier.id),
+        'name': tier.name,
+        'price': float(tier.price),
+        'description': tier.description,
+        'quantity': tier.quantity,
+        'available': tier.available,
+        'sold': tier.sold,
+        'perks': tier.perks,
+        'admits': tier.admits,
+        'salePrice': float(tier.sale_price) if tier.sale_price is not None else None,
+        'saleStartsAt': iso(tier.sale_starts_at),
+        'saleEndsAt': iso(tier.sale_ends_at),
+        'saleQuantity': tier.sale_quantity,
+        'saleRemaining': tier.sale_remaining,
+        'saleActive': on_sale,
+        'currentPrice': float(current_price),
+        'onSaleFrom': iso(tier.on_sale_from),
+        'onSaleUntil': iso(tier.on_sale_until),
+        'salesState': tier.sales_state(now),
+    }
 
 
 class AgendaItemSerializer(serializers.ModelSerializer):
@@ -86,10 +150,10 @@ class GatheringSerializer(serializers.Serializer):
         pricing = attrs.get('pricing')
         if pricing is not None:
             if is_free:
-                # Free events cost nothing at every tier
+                # Free events cost nothing at every tier, so there is nothing to put on sale either
                 pricing['startingPrice'] = 0
                 for tier in pricing.get('tiers', []):
-                    tier['price'] = 0
+                    tier.update(price=0, sale_price=None, sale_starts_at=None, sale_ends_at=None, sale_quantity=None)
             elif pricing['startingPrice'] <= 0:
                 raise serializers.ValidationError(
                     {'pricing': 'Enter a ticket price above KSh 0, or mark the event as free.'}
@@ -98,7 +162,9 @@ class GatheringSerializer(serializers.Serializer):
             # Switching an existing event to free without resending pricing
             attrs['pricing'] = {'startingPrice': 0, 'tiers': [
                 {'id': str(t.id), 'name': t.name, 'price': 0, 'description': t.description,
-                 'available': t.available, 'perks': t.perks}
+                 'quantity': t.quantity, 'perks': t.perks, 'admits': t.admits,
+                 'on_sale_from': t.on_sale_from, 'on_sale_until': t.on_sale_until,
+                 'sale_price': None, 'sale_starts_at': None, 'sale_ends_at': None, 'sale_quantity': None}
                 for t in self.instance.tiers.all()
             ]}
         elif 'is_free' in attrs and not is_free and self.instance is not None and self.instance.starting_price <= 0:
@@ -112,8 +178,12 @@ class GatheringSerializer(serializers.Serializer):
                 # The cheapest ticket is the price shown on the event
                 attrs['pricing']['startingPrice'] = min(t['price'] for t in tiers)
             if all('quantity' in t for t in tiers):
-                # Capacity is the sum of the ticket types
-                attrs['capacity'] = sum(t['quantity'] for t in tiers)
+                # Capacity is the number of people every ticket type admits in total
+                existing = {str(t.id): t for t in self.instance.tiers.all()} if self.instance is not None else {}
+                attrs['capacity'] = sum(
+                    t['quantity'] * t.get('admits', getattr(existing.get(str(t.get('id', ''))), 'admits', 1))
+                    for t in tiers
+                )
         capacity = attrs.get('capacity')
         if capacity is not None and self.instance is not None and capacity < self.instance.attendee_count:
             raise serializers.ValidationError(
@@ -139,7 +209,21 @@ class GatheringSerializer(serializers.Serializer):
             revenue, tickets = totals['revenue'], totals['tickets']
         return {'revenue': float(revenue or 0), 'ticketsSold': int(tickets or 0)}
 
+    def _is_owner(self, obj):
+        request = self.context.get('request')
+        return bool(request and request.user.is_authenticated and obj.organizer_id == request.user.id)
+
+    def _confirmed_attendees(self, obj):
+        """People admitted by confirmed bookings (a couple ticket counts 2). Only for the organizer."""
+        if not self._is_owner(obj):
+            return None
+        if hasattr(obj, 'people_confirmed'):
+            return int(obj.people_confirmed or 0)
+        people = obj.bookings.filter(status='confirmed').aggregate(n=Sum(F('quantity') * F('admits_per_ticket')))['n']
+        return int(people or 0)
+
     def to_representation(self, obj):
+        now = timezone.now()
         return {
             'id': str(obj.id),
             'organizerId': str(obj.organizer_id),
@@ -166,19 +250,7 @@ class GatheringSerializer(serializers.Serializer):
             'pricing': {
                 'currency': obj.currency,
                 'startingPrice': float(obj.starting_price),
-                'tiers': [
-                    {
-                        'id': str(t.id),
-                        'name': t.name,
-                        'price': float(t.price),
-                        'description': t.description,
-                        'quantity': t.quantity,
-                        'available': t.available,
-                        'sold': t.sold,
-                        'perks': t.perks,
-                    }
-                    for t in obj.tiers.all()
-                ],
+                'tiers': [tier_payload(t, now) for t in obj.tiers.all()],
             },
             'capacity': obj.capacity,
             'attendeeCount': obj.attendee_count,
@@ -199,6 +271,7 @@ class GatheringSerializer(serializers.Serializer):
             'curatorNote': obj.curator_note,
             'createdAt': obj.created_at.isoformat() if obj.created_at else None,
             'organizerStats': self._organizer_stats(obj),
+            'confirmedAttendees': self._confirmed_attendees(obj),
         }
 
     # --- writing -------------------------------------------------------------
@@ -254,6 +327,13 @@ class GatheringSerializer(serializers.Serializer):
             available = tier_data.pop('available', None)
             tier = existing.get(tier_id) or TicketTier(gathering=instance, quantity=0, available=0)
             sold = tier.sold if tier.pk else 0
+            admits = tier_data.get('admits')
+            if tier.pk and sold and admits is not None and admits != tier.admits:
+                # Sold tickets already admit their number of people; changing it would break the counts
+                raise serializers.ValidationError(
+                    {'pricing': f'"{tier.name}" already has tickets sold, so the people each ticket admits '
+                                f'cannot change.'}
+                )
             if quantity is not None:
                 if quantity < sold:
                     raise serializers.ValidationError(

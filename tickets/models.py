@@ -25,8 +25,12 @@ class Booking(models.Model):
     tier = models.ForeignKey(TicketTier, on_delete=models.SET_NULL, null=True, blank=True, related_name='bookings')
 
     tier_name = models.CharField(max_length=120)
+    # Tickets bought; each admits `admits_per_ticket` people (copied from the tier at booking time)
     quantity = models.PositiveIntegerField(default=1)
+    admits_per_ticket = models.PositiveSmallIntegerField(default=1)
+    # The unit price actually charged, and whether it was the tier's flash-sale price
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+    is_sale_price = models.BooleanField(default=False)
     total_price = models.DecimalField(max_digits=10, decimal_places=2)
 
     attendee_name = models.CharField(max_length=120)
@@ -63,6 +67,11 @@ class Booking(models.Model):
     @property
     def is_confirmed(self):
         return self.status == 'confirmed'
+
+    @property
+    def people(self):
+        """How many people the booking admits (and how many places of capacity it uses)."""
+        return self.quantity * self.admits_per_ticket
 
     def __str__(self):
         return f"{self.ticket_code or self.status} - {self.gathering.title}"

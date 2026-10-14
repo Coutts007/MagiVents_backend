@@ -5,7 +5,7 @@ from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 
-from .documents import build_ticket_pdf, payment_line, ticket_url
+from .documents import admits_label, build_ticket_pdf, payment_line, ticket_url
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ def send_booking_confirmation(booking):
             'venue': ', '.join(filter(None, [g.venue_name, g.venue_address, g.venue_city])),
             'payment': payment_line(booking),
             'ticket_url': ticket_url(booking),
-            'people': f'{booking.quantity} {"person" if booking.quantity == 1 else "people"}',
+            'people': admits_label(booking),
             'contact_email': settings.MAGIVENTS_CONTACT_EMAIL,
         }
         message = EmailMultiAlternatives(

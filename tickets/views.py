@@ -150,7 +150,8 @@ class PromoValidateView(APIView):
         tier_id = data.get('tierId', '')
         if data.get('quantity'):
             tier = gathering.tiers.filter(id=int(tier_id)).first() if tier_id.isdigit() else None
-            unit = tier.price if tier else gathering.starting_price
+            # The price in effect right now (the flash-sale price while a sale runs)
+            unit = tier.price_at()[0] if tier else gathering.starting_price
             subtotal = unit * data['quantity']
             discount = promo_discount(subtotal, code.percent_off)
             result.update(subtotal=float(subtotal), discount=float(discount), total=float(max(0, subtotal - discount)))

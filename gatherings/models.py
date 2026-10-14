@@ -1,6 +1,7 @@
 import uuid
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 class Gathering(models.Model):
     CATEGORIES = [
@@ -98,6 +99,15 @@ class Gathering(models.Model):
 
 
 class TicketTier(models.Model):
+    """A ticket type the organizer sets up: VVIP, VIP, Regular, Couple, Group, Early Bird or any custom name.
+
+    One ticket is sold at one price and admits `admits` people (2 for a couple, 5 or 10 for a group), so it
+    uses that many places of the event's capacity. A flash sale lowers the price between two times, optionally
+    for a limited number of tickets; `on_sale_from` / `on_sale_until` open and close the tier by itself.
+    All times are stored in UTC.
+    """
+    MAX_ADMITS = 100
+
     gathering = models.ForeignKey(Gathering, on_delete=models.CASCADE, related_name='tiers')
     name = models.CharField(max_length=120)  # e.g. "VIP"
     price = models.DecimalField(max_digits=10, decimal_places=2)
@@ -107,6 +117,20 @@ class TicketTier(models.Model):
     available = models.PositiveIntegerField(default=50)
     perks = models.JSONField(default=list, blank=True)
     order = models.PositiveIntegerField(default=0)
+    # People one ticket admits
+    admits = models.PositiveSmallIntegerField(default=1)
+
+    # Flash sale: sale_price applies from sale_starts_at (inclusive) to sale_ends_at (exclusive),
+    # for at most sale_quantity tickets when a limit is set. sale_sold counts tickets held or sold at that price.
+    sale_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    sale_starts_at = models.DateTimeField(null=True, blank=True)
+    sale_ends_at = models.DateTimeField(null=True, blank=True)
+    sale_quantity = models.PositiveIntegerField(null=True, blank=True)
+    sale_sold = models.PositiveIntegerField(default=0)
+
+    # Optional sales window for the tier itself (e.g. Early Bird closes on its own)
+    on_sale_from = models.DateTimeField(null=True, blank=True)
+    on_sale_until = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['order', 'id']
@@ -114,6 +138,36 @@ class TicketTier(models.Model):
     @property
     def sold(self):
         return max(0, self.quantity - self.available)
+
+    @property
+    def sale_remaining(self):
+        """Tickets still available at the sale price, or None when the sale has no limit."""
+        if self.sale_quantity is None:
+            return None
+        return max(0, min(self.sale_quantity - self.sale_sold, self.available))
+
+    def sale_active(self, now=None):
+        now = now or timezone.now()
+        return (
+            self.sale_price is not None and self.sale_starts_at is not None and self.sale_ends_at is not None
+            and self.sale_starts_at <= now < self.sale_ends_at
+            and (self.sale_quantity is None or self.sale_sold < self.sale_quantity)
+        )
+
+    def price_at(self, now=None):
+        """(unit price in effect, whether it is the flash-sale price). The server alone decides this."""
+        if self.sale_active(now):
+            return self.sale_price, True
+        return self.price, False
+
+    def sales_state(self, now=None):
+        """'on_sale', 'not_started' or 'ended' for the tier's own sales window."""
+        now = now or timezone.now()
+        if self.on_sale_from and now < self.on_sale_from:
+            return 'not_started'
+        if self.on_sale_until and now >= self.on_sale_until:
+            return 'ended'
+        return 'on_sale'
 
     def __str__(self):
         return f"{self.name} - {self.gathering.title}"

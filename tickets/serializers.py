@@ -52,7 +52,11 @@ class BookingSerializer(serializers.ModelSerializer):
             'venueName': g.venue_name,
             'tierName': obj.tier_name,
             'quantity': obj.quantity,
+            # People the booking admits in total, and per ticket (a couple ticket admits 2)
+            'admits': obj.people,
+            'admitsPerTicket': obj.admits_per_ticket,
             'unitPrice': float(obj.unit_price),
+            'isSalePrice': obj.is_sale_price,
             'totalPrice': float(obj.total_price),
             'attendeeName': obj.attendee_name,
             'attendeeEmail': obj.attendee_email,
@@ -93,9 +97,6 @@ class BookingSerializer(serializers.ModelSerializer):
 
         if gathering.status != 'published':
             raise serializers.ValidationError('This gathering is not open for reservations.')
-        remaining = gathering.capacity - gathering.attendee_count
-        if quantity > remaining:
-            raise serializers.ValidationError(f'Only {max(remaining, 0)} places remain for this gathering.')
 
         tier = None
         tiers = TicketTier.objects.select_for_update().filter(gathering=gathering)
@@ -106,13 +107,35 @@ class BookingSerializer(serializers.ModelSerializer):
         if tier is None and tiers.exists():
             raise serializers.ValidationError({'tierId': 'Please choose a valid ticket tier.'})
 
+        # Everything below runs under the gathering and tier row locks taken above, so two buyers can never
+        # both get the last place, the last ticket, or the last ticket at the flash-sale price
+        now = timezone.now()
+        admits, is_sale = (tier.admits if tier is not None else 1), False
+        people = quantity * admits
+        remaining = gathering.capacity - gathering.attendee_count
+        if people > remaining:
+            raise serializers.ValidationError(f'Only {max(remaining, 0)} places remain for this gathering.')
+
         if tier is not None:
+            state = tier.sales_state(now)
+            if state == 'not_started':
+                raise serializers.ValidationError(f'"{tier.name}" tickets are not on sale yet.')
+            if state == 'ended':
+                raise serializers.ValidationError(f'Sales of "{tier.name}" tickets have closed.')
             if quantity > tier.available:
                 raise serializers.ValidationError(f'Only {tier.available} "{tier.name}" tickets remain.')
-            unit_price = tier.price
+            unit_price, is_sale = tier.price_at(now)
+            if is_sale and tier.sale_remaining is not None and quantity > tier.sale_remaining:
+                # Never charge a mix of prices, and never charge more than the price the buyer was shown
+                raise serializers.ValidationError(
+                    f'Only {tier.sale_remaining} "{tier.name}" tickets are left at the sale price. '
+                    f'Choose {tier.sale_remaining} or fewer.'
+                )
             tier_name = tier.name
             tier.available -= quantity
-            tier.save(update_fields=['available'])
+            if is_sale:
+                tier.sale_sold += quantity
+            tier.save(update_fields=['available', 'sale_sold'])
         else:
             unit_price = gathering.starting_price
             tier_name = 'General Admission'
@@ -152,7 +175,9 @@ class BookingSerializer(serializers.ModelSerializer):
             gathering=gathering,
             tier=tier,
             tier_name=tier_name,
+            admits_per_ticket=admits,
             unit_price=unit_price,
+            is_sale_price=is_sale,
             discount=discount,
             total_price=total,
             currency=gathering.currency,
@@ -163,7 +188,7 @@ class BookingSerializer(serializers.ModelSerializer):
             **validated_data,
         )
 
-        gathering.attendee_count += quantity
+        gathering.attendee_count += people
         if gathering.attendee_count >= gathering.capacity:
             gathering.status = 'sold_out'
         gathering.save(update_fields=['attendee_count', 'status'])
@@ -255,6 +280,7 @@ def attendee_row(booking):
         'attendeeEmail': booking.attendee_email,
         'tierName': booking.tier_name,
         'quantity': booking.quantity,
+        'admits': booking.people,
         'bookingDate': booking.booking_date.isoformat(),
         'checkedInAt': booking.checked_in_at.isoformat() if booking.checked_in_at else None,
     }

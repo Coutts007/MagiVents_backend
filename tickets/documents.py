@@ -29,6 +29,16 @@ def ticket_url(booking):
     return f"{settings.FRONTEND_URL.rstrip('/')}/?ticket={booking.id}"
 
 
+def admits_label(booking):
+    """e.g. "admits 1 person", "admits 2 people (1 ticket × 2)" for a couple ticket."""
+    people = booking.people
+    label = f'admits {people} {"person" if people == 1 else "people"}'
+    if booking.admits_per_ticket > 1:
+        tickets = f'{booking.quantity} ticket{"" if booking.quantity == 1 else "s"}'
+        label += f' ({tickets} × {booking.admits_per_ticket})'
+    return label
+
+
 def format_kes(amount):
     return f'KSh {int(round(amount)):,}'
 
@@ -105,8 +115,7 @@ def build_ticket_pdf(booking):
         ('Date & time', f'{g.date_display} · {g.time_display}'),
         ('Venue', ', '.join(filter(None, [g.venue_name, g.venue_address, g.venue_city]))),
         ('Attendee', f'{booking.attendee_name} ({booking.attendee_email})'),
-        ('Ticket type', f'{booking.tier_name} · admits {booking.quantity} '
-                        f'{"person" if booking.quantity == 1 else "people"}'),
+        ('Ticket type', f'{booking.tier_name} · {admits_label(booking)}'),
         ('Payment', payment_line(booking)),
         ('Booked on', booking.booking_date.strftime('%d %b %Y')),
     ]

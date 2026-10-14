@@ -62,8 +62,11 @@ def _release(gathering, booking, tier, new_status):
     if booking.holds_tickets:
         if tier is not None:
             tier.available = min(tier.quantity, tier.available + booking.quantity)
-            tier.save(update_fields=['available'])
-        gathering.attendee_count = max(0, gathering.attendee_count - booking.quantity)
+            if booking.is_sale_price:
+                # The tickets go back to the flash-sale allowance they came from
+                tier.sale_sold = max(0, tier.sale_sold - booking.quantity)
+            tier.save(update_fields=['available', 'sale_sold'])
+        gathering.attendee_count = max(0, gathering.attendee_count - booking.people)
         if gathering.status == 'sold_out' and gathering.attendee_count < gathering.capacity:
             gathering.status = 'published'
         gathering.save(update_fields=['attendee_count', 'status'])
@@ -80,14 +83,20 @@ def _reacquire(gathering, booking, tier):
     """Takes the booking's tickets again after a release, if they are still available."""
     if booking.holds_tickets:
         return True
-    if gathering.status == 'draft' or gathering.capacity - gathering.attendee_count < booking.quantity:
+    if gathering.status == 'draft' or gathering.capacity - gathering.attendee_count < booking.people:
         return False
     if booking.tier_id and (tier is None or tier.available < booking.quantity):
         return False
+    if (booking.is_sale_price and tier is not None and tier.sale_quantity is not None
+            and tier.sale_sold + booking.quantity > tier.sale_quantity):
+        # The flash-sale allowance has gone to other buyers in the meantime
+        return False
     if tier is not None:
         tier.available -= booking.quantity
-        tier.save(update_fields=['available'])
-    gathering.attendee_count += booking.quantity
+        if booking.is_sale_price:
+            tier.sale_sold += booking.quantity
+        tier.save(update_fields=['available', 'sale_sold'])
+    gathering.attendee_count += booking.people
     if gathering.attendee_count >= gathering.capacity:
         gathering.status = 'sold_out'
     gathering.save(update_fields=['attendee_count', 'status'])
