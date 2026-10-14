@@ -181,6 +181,10 @@ class TierEditorAndRoleTests(APITestCase):
 
         # Book 5 VIP tickets, then the quantity cannot drop below what is sold
         gid, vip = res.data['id'], res.data['pricing']['tiers'][0]
+        # New events are saved as drafts (listing fee brief): publish it before booking
+        self.assertEqual(res.data['status'], 'draft')
+        self.assertEqual(self.client.patch(f'/api/gatherings/{gid}/', {'status': 'published'},
+                                           format='json').status_code, 200)
         booking = self.client.post('/api/bookings/', {
             'eventId': gid, 'tierId': vip['id'], 'quantity': 5, 'attendeeName': 'A', 'attendeeEmail': 'a@x.com',
             'paymentMethod': 'card'}, format='json')

@@ -272,7 +272,22 @@ class GatheringSerializer(serializers.Serializer):
             'createdAt': obj.created_at.isoformat() if obj.created_at else None,
             'organizerStats': self._organizer_stats(obj),
             'confirmedAttendees': self._confirmed_attendees(obj),
+            'listingFee': self._listing_fee(obj),
         }
+
+    def _listing_fee(self, obj):
+        """The event's listing-fee state (pay to publish). Only for the organizer."""
+        if not self._is_owner(obj):
+            return None
+        from listings.models import ListingFee
+        from listings.services import fee_payload, fee_table
+        if 'fee_table' not in self.context:
+            self.context['fee_table'] = fee_table()
+        try:
+            fee = obj.listing_fee
+        except ListingFee.DoesNotExist:
+            return None
+        return fee_payload(fee, fee_table=self.context['fee_table'])
 
     # --- writing -------------------------------------------------------------
 
@@ -368,6 +383,8 @@ class GatheringSerializer(serializers.Serializer):
     def create(self, validated_data):
         tiers = validated_data.get('pricing', {}).get('tiers', [])
         agenda = validated_data.get('agenda', [])
+        # Every new event is saved as a draft; publishing is a separate step that checks the listing fee
+        validated_data['status'] = 'draft'
         instance = Gathering(organizer=validated_data.pop('organizer'))
         self._apply_fields(instance, validated_data)
         instance.save()

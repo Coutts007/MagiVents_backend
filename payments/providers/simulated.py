@@ -43,6 +43,6 @@ class SimulatedProvider(PaymentProvider):
 
     def instructions(self, payment):
         data = {'simulated': True}
-        if payment.method == 'mpesa' and payment.booking.mpesa_mode == 'paybill':
+        if payment.method == 'mpesa' and payment.booking_id and payment.booking.mpesa_mode == 'paybill':
             data.update(paybill=settings.MPESA_PAYBILL_NUMBER, accountNumber=payment.reference)
         return data

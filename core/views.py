@@ -13,6 +13,7 @@ class PublicConfigView(APIView):
     authentication_classes = []
 
     def get(self, request):
+        from listings.services import online_payments_available
         from payments.providers import available_methods
         return Response({
             'mpesaPaybill': settings.MPESA_C2B_SHORTCODE or settings.MPESA_PAYBILL_NUMBER,
@@ -20,6 +21,8 @@ class PublicConfigView(APIView):
             'paymentsMode': settings.PAYMENTS_MODE,
             'paymentMethods': available_methods(),
             'paymentHoldMinutes': settings.PAYMENT_HOLD_MINUTES,
+            # False in live mode: listing fees are paid by hand and confirmed by an admin
+            'listingFeeOnline': online_payments_available(),
         })
 
 

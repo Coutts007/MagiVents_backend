@@ -4,13 +4,25 @@ from django.conf import settings
 from django.db import models
 
 
+class BookingPaymentManager(models.Manager):
+    def get_queryset(self):
+        return super().get_queryset().filter(purpose='booking')
+
+
 class Payment(models.Model):
-    """One attempt to pay for a booking with one provider. A booking can have several (retries)."""
+    """One attempt to pay, with one provider, for either a booking (tickets) or an event's listing fee.
+    A booking or a listing fee can have several attempts (retries)."""
+    PURPOSE_CHOICES = (
+        ('booking', 'Ticket booking'),
+        ('listing_fee', 'Listing fee'),
+    )
     PROVIDER_CHOICES = (
         ('simulated', 'Simulated'),
         ('mpesa_stk', 'M-Pesa STK Push'),
         ('mpesa_paybill', 'M-Pesa Paybill'),
         ('paystack', 'Card (Paystack)'),
+        # Money an admin confirmed by hand (e.g. a listing fee paid to the platform Paybill)
+        ('manual', 'Recorded by an admin'),
     )
     STATUS_CHOICES = (
         ('pending', 'Pending'),
@@ -19,7 +31,15 @@ class Payment(models.Model):
     )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    booking = models.ForeignKey('tickets.Booking', on_delete=models.CASCADE, related_name='payments')
+    purpose = models.CharField(max_length=20, choices=PURPOSE_CHOICES, default='booking', db_index=True)
+    # Exactly one of these is set, matching `purpose`
+    booking = models.ForeignKey('tickets.Booking', on_delete=models.CASCADE, null=True, blank=True,
+                                related_name='payments')
+    # Listing-fee payments are money records: an event whose fee was paid cannot be deleted with them
+    listing_fee = models.ForeignKey('listings.ListingFee', on_delete=models.PROTECT, null=True, blank=True,
+                                    related_name='payments')
+    # For a listing-fee payment that moves a paid event to a dearer category: the category it pays for
+    target_category = models.CharField(max_length=60, blank=True, default='')
     provider = models.CharField(max_length=20, choices=PROVIDER_CHOICES)
     # What the attendee picked: mpesa (stk / paybill) or card
     method = models.CharField(max_length=20)
@@ -48,8 +68,21 @@ class Payment(models.Model):
     completed_at = models.DateTimeField(null=True, blank=True)
     last_queried_at = models.DateTimeField(null=True, blank=True)
 
+    objects = models.Manager()
+    #: Only ticket payments (what the staff console lists)
+    booking_payments = BookingPaymentManager()
+
     class Meta:
         ordering = ['-created_at']
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(purpose='booking', booking__isnull=False, listing_fee__isnull=True)
+                    | models.Q(purpose='listing_fee', booking__isnull=True, listing_fee__isnull=False)
+                ),
+                name='payment_is_for_a_booking_or_a_listing_fee',
+            ),
+        ]
 
     def __str__(self):
         return f'{self.get_provider_display()} {self.reference} ({self.status})'

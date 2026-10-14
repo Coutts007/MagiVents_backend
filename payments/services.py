@@ -144,9 +144,17 @@ def _confirm(booking, payment):
     transaction.on_commit(lambda: send_booking_confirmation(booking))
 
 
+def _is_listing_fee(payment_id):
+    return Payment.objects.filter(id=payment_id, purpose='listing_fee').exists()
+
+
 @transaction.atomic
 def record_success(payment_id, amount, *, receipt='', provider_reference='', payload=None, source='callback'):
     """The provider says this payment went through. Safe to call any number of times."""
+    if _is_listing_fee(payment_id):
+        from listings.services import record_fee_success
+        return record_fee_success(payment_id, amount, receipt=receipt, provider_reference=provider_reference,
+                                  payload=payload, source=source)
     booking_id = Payment.objects.values_list('booking_id', flat=True).get(id=payment_id)
     gathering, booking, tier = _locked(booking_id)
     payment = Payment.objects.select_for_update().get(id=payment_id)
@@ -196,6 +204,9 @@ def record_success(payment_id, amount, *, receipt='', provider_reference='', pay
 @transaction.atomic
 def record_failure(payment_id, reason, *, payload=None, source='callback'):
     """The provider says this payment did not go through. Releases the booking's tickets once."""
+    if _is_listing_fee(payment_id):
+        from listings.services import record_fee_failure
+        return record_fee_failure(payment_id, reason, payload=payload, source=source)
     booking_id = Payment.objects.values_list('booking_id', flat=True).get(id=payment_id)
     gathering, booking, tier = _locked(booking_id)
     payment = Payment.objects.select_for_update().get(id=payment_id)

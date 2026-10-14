@@ -58,7 +58,7 @@ class GatheringViewSet(viewsets.ModelViewSet):
     search_fields = ['title', 'subtitle', 'category', 'venue_name', 'venue_city', 'host_name', 'tags']
 
     def get_queryset(self):
-        qs = Gathering.objects.prefetch_related('tiers', 'agenda_items').order_by('iso_date').annotate(
+        qs = Gathering.objects.select_related('listing_fee').prefetch_related('tiers', 'agenda_items').order_by('iso_date').annotate(
             # Sales count confirmed bookings only, not tickets held by unpaid ones
             revenue_total=Sum('bookings__total_price', filter=Q(bookings__status='confirmed')),
             tickets_sold=Sum('bookings__quantity', filter=Q(bookings__status='confirmed')),
@@ -82,7 +82,28 @@ class GatheringViewSet(viewsets.ModelViewSet):
         return super().retrieve(request, *args, **kwargs)
 
     def perform_create(self, serializer):
-        serializer.save(organizer=self.request.user)
+        gathering = serializer.save(organizer=self.request.user)
+        from listings.services import amount_due, get_fee, kes
+        from notifications.services import notify_admins
+        due = amount_due(get_fee(gathering))
+        if due > 0:
+            organizer = self.request.user
+            notify_admins(
+                'listing_fee_due', f'New event awaiting its listing fee: {gathering.title}',
+                f'{organizer.first_name or organizer.email} created "{gathering.title}" ({gathering.category}). '
+                f'It is a draft until the listing fee of {kes(due)} is paid.',
+                dedupe_key=f'listing_fee_due:{gathering.id}', gathering=gathering,
+            )
+
+    def perform_destroy(self, instance):
+        from payments.models import Payment
+        fee_payments = Payment.objects.filter(listing_fee__gathering=instance)
+        if fee_payments.filter(status='succeeded').exists():
+            # The listing-fee payment is a money record that must be kept
+            raise PermissionDenied('This event\'s listing fee has been paid, so it cannot be deleted. Unpublish it instead.')
+        with transaction.atomic():
+            fee_payments.delete()
+            instance.delete()
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def my_gatherings(self, request):

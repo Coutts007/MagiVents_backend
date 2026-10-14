@@ -14,9 +14,13 @@ class PublishBlocked(APIException):
     status_code = status.HTTP_400_BAD_REQUEST
     default_code = 'publish_blocked'
 
-    def __init__(self, message, code=None, **extra):
-        super().__init__(detail={'error': message, 'code': code or self.default_code, **extra})
+    def __init__(self, message, code=None, status_code=None, **extra):
+        super().__init__(detail=message, code=code or self.default_code)
+        # Kept as plain values, so amounts stay numbers in the JSON response
+        self.detail = {'error': message, 'code': code or self.default_code, **extra}
         self.message = message
+        if status_code is not None:
+            self.status_code = status_code
 
 
 class OrganizerSuspended(PublishBlocked):
@@ -36,8 +40,9 @@ def sells_paid_tickets(gathering):
     return gathering.pk is not None and gathering.tiers.filter(price__gt=0).exists()
 
 
-def ensure_publishable(gathering):
-    """Raises PublishBlocked when `gathering` may not go public."""
+def ensure_publishable(gathering, check_fee=True):
+    """Raises PublishBlocked when `gathering` may not go public. The checks run in the order an organizer can
+    act on them, so nobody pays a listing fee for an event that still could not be published."""
     if gathering.organizer.is_suspended:
         raise OrganizerSuspended(suspended_message())
     if sells_paid_tickets(gathering):
@@ -48,3 +53,22 @@ def ensure_publishable(gathering):
                 'to pay out your ticket sales. Set them in your profile, or for this event in the event form.',
                 code='payment_details_missing',
             )
+    if check_fee:
+        from listings.services import ensure_fee_settled
+        ensure_fee_settled(gathering)
+
+
+def before_save(gathering):
+    """Called by Gathering.save(): the backstop for every path that publishes or changes the category."""
+    if gathering.is_public and gathering._loaded_status in (None, 'draft'):
+        ensure_publishable(gathering)
+    previous = gathering._loaded_category
+    if previous and gathering.category != previous:
+        from listings.services import ensure_category_change_allowed
+        ensure_category_change_allowed(gathering, previous)
+
+
+def after_save(gathering, previous_status, previous_category, created):
+    if created or gathering.status != previous_status or gathering.category != previous_category:
+        from listings.services import after_gathering_saved
+        after_gathering_saved(gathering, previous_status, previous_category)

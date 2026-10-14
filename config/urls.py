@@ -36,6 +36,7 @@ from accounts.views import (
 from core.views import GeocodeView, HealthView, PublicConfigView
 from payments.views import BookingPayView, BookingStatusView
 from gatherings.views import GatheringViewSet
+from listings.views import ListingFeeView, PayListingFeeView
 from tickets.views import (
     BookingViewSet,
     BookmarkListView,
@@ -100,6 +101,12 @@ urlpatterns = [
     # Gathering & Booking Resources
     # Staff console: secret path + staff account; anything else is a plain 404
     path('api/console/', include('console.urls')),
+
+    # Listing fee (pay to publish), per event; must come before the router's gatherings/<pk>/ routes
+    path('api/gatherings/<str:gathering_id>/listing-fee/', ListingFeeView.as_view(), name='listing_fee'),
+    path('api/gatherings/<str:gathering_id>/listing-fee/pay/', PayListingFeeView.as_view(), name='listing_fee_pay'),
+    # In-app notifications (the navbar bell)
+    path('api/notifications/', include('notifications.urls')),
 
     path('api/', include(router.urls)),
 ]

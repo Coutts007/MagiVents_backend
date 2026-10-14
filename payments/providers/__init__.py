@@ -26,8 +26,9 @@ def get_provider(method, mpesa_mode='stk'):
 
 
 def provider_for_payment(payment):
-    if payment.provider == 'simulated':
-        return SimulatedProvider(payment.method, payment.booking.mpesa_mode or 'stk')
+    if payment.provider in ('simulated', 'manual'):
+        mode = (payment.booking.mpesa_mode if payment.booking_id else '') or 'stk'
+        return SimulatedProvider(payment.method, mode)
     if payment.provider == 'paystack':
         from .paystack import PaystackProvider
         return PaystackProvider()
@@ -44,4 +45,4 @@ def available_methods():
     }
 
 
-__all__ = ['PaymentProvider', 'QueryResult', 'get_provider', 'provider_for_payment', 'available_methods', 'live_mode']
+__all__ = ['PaymentProvider', 'QueryResult', 'SimulatedProvider', 'get_provider', 'provider_for_payment', 'available_methods', 'live_mode']

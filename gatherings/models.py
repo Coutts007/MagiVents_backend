@@ -69,12 +69,12 @@ class Gathering(models.Model):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._loaded_status = None if self._state.adding else self.status
+        self._loaded_status = self._loaded_category = None
 
     @classmethod
     def from_db(cls, db, field_names, values):
         instance = super().from_db(db, field_names, values)
-        instance._loaded_status = instance.status
+        instance._loaded_status, instance._loaded_category = instance.status, instance.category
         return instance
 
     @property
@@ -82,12 +82,15 @@ class Gathering(models.Model):
         return self.status in ('published', 'sold_out')
 
     def save(self, *args, **kwargs):
+        from . import publishing
         # Backstop: a draft (or a new event) never becomes public without passing the publish rules
-        if self.is_public and self._loaded_status in (None, 'draft'):
-            from .publishing import ensure_publishable
-            ensure_publishable(self)
+        # (organizer not suspended, payment details, listing fee), whichever code path saves it
+        publishing.before_save(self)
+        created = self._state.adding
+        previous_status, previous_category = self._loaded_status, self._loaded_category
         super().save(*args, **kwargs)
-        self._loaded_status = self.status
+        self._loaded_status, self._loaded_category = self.status, self.category
+        publishing.after_save(self, previous_status, previous_category, created)
 
     def __str__(self):
         return self.title

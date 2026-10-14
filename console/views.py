@@ -93,7 +93,7 @@ class OverviewView(ConsoleView):
             row = daily.get(day, {})
             days.append({'date': day.isoformat(), 'revenue': money(row.get('revenue')), 'tickets': row.get('tickets') or 0})
 
-        refunds = Payment.objects.filter(needs_refund=True, refund_resolved_at__isnull=True)
+        refunds = Payment.booking_payments.filter(needs_refund=True, refund_resolved_at__isnull=True)
         refund_totals = refunds.aggregate(count=Count('id'), amount=Sum('amount'))
         pending = Booking.objects.filter(status='pending').aggregate(count=Count('id'), tickets=Sum('quantity'))
 
@@ -121,7 +121,7 @@ class OverviewView(ConsoleView):
             },
             'pendingHolds': {'bookings': pending['count'], 'tickets': pending['tickets'] or 0},
             'refundsOpen': {'count': refund_totals['count'], 'amount': money(refund_totals['amount'])},
-            'paymentsFailedLast7Days': Payment.objects.filter(status='failed', created_at__gte=now - timedelta(days=7)).count(),
+            'paymentsFailedLast7Days': Payment.booking_payments.filter(status='failed', created_at__gte=now - timedelta(days=7)).count(),
             'users': {
                 'total': User.objects.count(),
                 'organizers': User.objects.filter(role='curator').count(),
@@ -197,7 +197,7 @@ class OrganizerDetailView(ConsoleView):
         user = organizer_queryset().filter(id=user_id).first()
         if user is None:
             raise NotFound()
-        refunds = Payment.objects.filter(booking__gathering__organizer=user, needs_refund=True,
+        refunds = Payment.booking_payments.filter(booking__gathering__organizer=user, needs_refund=True,
                                          refund_resolved_at__isnull=True).count()
         return Response({
             **organizer_row(user),
@@ -287,7 +287,7 @@ def payment_row(p):
 
 class PaymentListView(ConsoleView):
     def get(self, request, secret):
-        qs = Payment.objects.select_related('booking__gathering__organizer', 'refund_resolved_by').order_by('-created_at')
+        qs = Payment.booking_payments.select_related('booking__gathering__organizer', 'refund_resolved_by').order_by('-created_at')
         params = request.query_params
         if params.get('status') in ('pending', 'succeeded', 'failed'):
             qs = qs.filter(status=params['status'])
@@ -308,7 +308,7 @@ class PaymentListView(ConsoleView):
 
 class PaymentDetailView(ConsoleView):
     def get(self, request, secret, payment_id):
-        payment = Payment.objects.select_related('booking__gathering__organizer', 'refund_resolved_by').filter(
+        payment = Payment.booking_payments.select_related('booking__gathering__organizer', 'refund_resolved_by').filter(
             id=payment_id).first()
         if payment is None:
             raise NotFound()
@@ -326,7 +326,7 @@ class ResolveRefundView(ConsoleView):
         if not note:
             raise ValidationError({'note': 'Say how it was settled, e.g. "Reversed on M-Pesa, ref QX12…".'})
         with transaction.atomic():
-            payment = Payment.objects.select_for_update().filter(id=payment_id).first()
+            payment = Payment.booking_payments.select_for_update().filter(id=payment_id).first()
             if payment is None:
                 raise NotFound()
             if not payment.needs_refund:
@@ -338,7 +338,7 @@ class ResolveRefundView(ConsoleView):
             payment.refund_note = note
             payment.save(update_fields=['refund_resolved_at', 'refund_resolved_by', 'refund_note', 'updated_at'])
             log_action(request, 'resolve_refund', 'payment', payment.id, payment.reference, note)
-        payment = Payment.objects.select_related('booking__gathering__organizer', 'refund_resolved_by').get(id=payment.id)
+        payment = Payment.booking_payments.select_related('booking__gathering__organizer', 'refund_resolved_by').get(id=payment.id)
         return Response(payment_row(payment), status=status.HTTP_200_OK)
 
 

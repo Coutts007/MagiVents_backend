@@ -82,6 +82,8 @@ INSTALLED_APPS = [
    'payments',
    'console',
    'payouts',
+   'notifications',
+   'listings',
 
 ]
 
@@ -238,6 +240,9 @@ EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', '15'))
 
 # Public address of the frontend; ticket QR codes and email links point here
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+
+# Email admins as well as notifying them in the app (new events with a listing fee due, fees paid or failed)
+ADMIN_NOTIFICATION_EMAILS = os.environ.get('ADMIN_NOTIFICATION_EMAILS', 'True') == 'True'
 
 # Google OAuth Client ID (must match Google Cloud Console)
 GOOGLE_OAUTH_CLIENT_ID = os.environ.get('GOOGLE_OAUTH_CLIENT_ID', '')

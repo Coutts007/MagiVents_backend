@@ -7,6 +7,7 @@ from django.db import transaction
 from accounts.models import User
 from gatherings.models import Gathering
 from gatherings.serializers import GatheringSerializer
+from listings.services import grandfather
 from payouts.models import PayoutAccount
 
 FIXTURE = Path(__file__).resolve().parents[2] / 'fixtures' / 'seed_events.json'
@@ -51,8 +52,11 @@ class Command(BaseCommand):
             if not serializer.is_valid():
                 raise CommandError(f"{event['id']}: {serializer.errors}")
             gathering = serializer.save(organizer=organizer, id=event['id'])
+            # New events are saved as drafts; demo events count as having paid their listing fee
+            grandfather(gathering)
             gathering.attendee_count = event.get('attendeeCount', 0)
-            gathering.save(update_fields=['attendee_count'])
+            gathering.status = event.get('status', 'published')
+            gathering.save(update_fields=['attendee_count', 'status'])
             added += 1
 
         if options.get('verbosity', 1):
