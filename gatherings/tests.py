@@ -8,6 +8,12 @@ from rest_framework.test import APITestCase
 from accounts.models import User
 from .models import Gathering
 
+
+def give_payout_details(user):
+    from payouts.models import PayoutAccount
+    PayoutAccount.objects.get_or_create(organizer=user, gathering=None,
+                                        defaults={'method': 'mpesa_phone', 'phone_number': '254712345678'})
+
 SEED = json.loads((Path(__file__).resolve().parent / 'fixtures' / 'seed_events.json').read_text())
 
 
@@ -22,6 +28,8 @@ class GatheringApiTests(APITestCase):
         # Creating events needs the organizer role (Phase 2); the assertions below are unchanged
         self.owner = User.objects.create_user(username='o@x.com', email='o@x.com', password='pw-Owner-123',
                                               role='curator')
+        # Publishing paid events needs payment details (Part 3); the assertions below are unchanged
+        give_payout_details(self.owner)
         self.other = User.objects.create_user(username='p@x.com', email='p@x.com', password='pw-Other-123')
 
     def test_seed_and_public_list(self):
@@ -144,6 +152,8 @@ class TierEditorAndRoleTests(APITestCase):
     def setUp(self):
         self.curator = User.objects.create_user(username='c@x.com', email='c@x.com', password='pw-Curator-1',
                                                 role='curator')
+        # Publishing paid events needs payment details (Part 3); the assertions below are unchanged
+        give_payout_details(self.curator)
 
     def test_patron_must_become_organizer_to_create(self):
         patron = User.objects.create_user(username='p@x.com', email='p@x.com', password='pw-Patron-123')
@@ -152,6 +162,7 @@ class TierEditorAndRoleTests(APITestCase):
         res = self.client.post('/api/auth/become-organizer/')
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data['role'], 'curator')
+        give_payout_details(patron)  # Part 3 fixture: paid events need payment details to publish
         self.assertEqual(self.client.post('/api/gatherings/', event_payload(), format='json').status_code, 201)
 
     def test_tier_quantities_set_capacity_and_order(self):

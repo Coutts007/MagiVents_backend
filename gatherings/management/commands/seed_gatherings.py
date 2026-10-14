@@ -7,6 +7,7 @@ from django.db import transaction
 from accounts.models import User
 from gatherings.models import Gathering
 from gatherings.serializers import GatheringSerializer
+from payouts.models import PayoutAccount
 
 FIXTURE = Path(__file__).resolve().parents[2] / 'fixtures' / 'seed_events.json'
 SEED_ORGANIZER_EMAIL = 'curator@magivents.local'
@@ -30,6 +31,11 @@ class Command(BaseCommand):
         if created:
             organizer.set_unusable_password()
             organizer.save()
+        # Paid demo events need payment details to be on sale. These are placeholders, never real money.
+        PayoutAccount.objects.get_or_create(
+            organizer=organizer, gathering=None,
+            defaults={'method': 'mpesa_phone', 'phone_number': '254700000000'},
+        )
 
         if reset:
             Gathering.objects.filter(organizer=organizer).delete()

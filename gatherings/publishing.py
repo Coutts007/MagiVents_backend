@@ -28,7 +28,23 @@ def suspended_message():
     return 'Your organizer account is suspended, so you cannot create or publish events. Contact MagiVents for help.'
 
 
+def sells_paid_tickets(gathering):
+    if gathering.is_free:
+        return False
+    if gathering.starting_price > 0:
+        return True
+    return gathering.pk is not None and gathering.tiers.filter(price__gt=0).exists()
+
+
 def ensure_publishable(gathering):
     """Raises PublishBlocked when `gathering` may not go public."""
     if gathering.organizer.is_suspended:
         raise OrganizerSuspended(suspended_message())
+    if sells_paid_tickets(gathering):
+        from payouts.models import payout_account_for
+        if payout_account_for(gathering) is None:
+            raise PublishBlocked(
+                'Add your payment details before publishing an event with paid tickets, so MagiVents knows where '
+                'to pay out your ticket sales. Set them in your profile, or for this event in the event form.',
+                code='payment_details_missing',
+            )

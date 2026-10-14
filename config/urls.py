@@ -88,6 +88,8 @@ urlpatterns = [
     path('api/bookings/<uuid:booking_id>/status/', BookingStatusView.as_view(), name='booking_status'),
     path('api/bookings/<uuid:booking_id>/pay/', BookingPayView.as_view(), name='booking_pay'),
     path('api/payments/', include('payments.urls')),
+    # Organizer payment details (where MagiVents pays out their ticket money), earnings and payouts
+    path('api/payouts/', include('payouts.urls')),
 
     # Tickets by booking UUID (QR code / email link), and guest lookup by code + email
     path('api/tickets/lookup/', TicketLookupView.as_view(), name='ticket_lookup'),

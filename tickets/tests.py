@@ -320,7 +320,7 @@ class TierTypeBookingTests(APITestCase):
         self.organizer = User.objects.create_user(username='o@x.com', email='o@x.com', password='pw-Org-12345',
                                                   role='curator')
         self.client.force_authenticate(self.organizer)
-        payload = event_payload(isFree=False)
+        payload = event_payload(isFree=False, status='draft')
         payload['pricing'] = {'currency': 'KES', 'startingPrice': 1, 'tiers': [
             {'name': 'Regular', 'price': 1000, 'quantity': 20},
             {'name': 'Couple', 'price': 1800, 'quantity': 10, 'admits': 2},
@@ -459,7 +459,7 @@ class TierValidationTests(APITestCase):
         self.client.force_authenticate(self.organizer)
 
     def create(self, **tier):
-        payload = event_payload(isFree=False)
+        payload = event_payload(isFree=False, status='draft')
         payload['pricing'] = {'currency': 'KES', 'startingPrice': 1, 'tiers': [{'name': 'VIP', 'price': 3000,
                                                                                'quantity': 10, **tier}]}
         return self.client.post('/api/gatherings/', payload, format='json')
