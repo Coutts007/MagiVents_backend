@@ -11,7 +11,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from .prompts import ACTION_INSTRUCTIONS
-from .providers import AssistantError
+from .providers import SERVER_ERROR, AssistantError
 from .services import run_turn
 from .streaming import sse
 
@@ -82,8 +82,7 @@ class EventAssistantView(APIView):
                 yield sse('error', exc.payload())
             except Exception:  # noqa: BLE001 - the form must never break because the assistant failed
                 logger.exception('assistant turn failed for user=%s', request.user.id)
-                yield sse('error', {'error': 'Something went wrong with the assistant. Please try again.',
-                                    'code': 'internal', 'retryable': True})
+                yield sse('error', {'error': SERVER_ERROR, 'code': 'internal', 'retryable': True})
 
         response = StreamingHttpResponse(stream(), content_type='text/event-stream; charset=utf-8')
         response['Cache-Control'] = 'no-cache'

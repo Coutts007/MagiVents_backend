@@ -67,7 +67,7 @@ def stk_callback(request, secret):
         record_success(payment.id, items.get('Amount', 0), receipt=str(items.get('MpesaReceiptNumber', '')),
                        provider_reference=checkout_id, payload=body, source='stk_callback')
     else:
-        reason = STK_RESULT_MESSAGES.get(int(code) if str(code).isdigit() else -1, callback.get('ResultDesc', ''))
+        reason = STK_RESULT_MESSAGES.get(int(code) if str(code).isdigit() else -1, '')
         record_failure(payment.id, reason, payload=body, source='stk_callback')
     return JsonResponse(ACCEPTED)
 

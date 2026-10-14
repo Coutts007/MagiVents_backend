@@ -15,7 +15,7 @@ import time
 from django.conf import settings
 
 from .prompts import ACTION_INSTRUCTIONS, ACTION_LABELS, SYSTEM_PROMPT
-from .providers import AssistantError, ProviderRequest, get_provider
+from .providers import SERVER_ERROR, AssistantError, ProviderRequest, get_provider
 from .schema import OUTPUT_SCHEMA, sanitize_form_state, validate_suggestions
 from .streaming import ReplyExtractor
 
@@ -106,7 +106,7 @@ def _turn(user, provider, request, events, first):
             break
         logger.warning('assistant answer could not be parsed (user=%s, attempt %s)', user.id, attempt + 1)
     else:
-        raise AssistantError('The assistant gave an answer that could not be read. Please try again.', 'bad_output', 502)
+        raise AssistantError(SERVER_ERROR, 'bad_output', 502)
 
     suggestions = validate_suggestions(answer['suggestions'], request.form)
     dropped = len(answer['suggestions']) - len(suggestions)

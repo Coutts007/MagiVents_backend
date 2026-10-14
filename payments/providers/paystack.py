@@ -57,7 +57,8 @@ def result_from_verify(payment, body):
         return QueryResult('succeeded', amount=Decimal(data.get('amount', 0)) / 100,
                            provider_reference=str(data.get('id', '')), raw=body)
     if status in FAILED_STATUSES:
-        return QueryResult('failed', reason=data.get('gateway_response') or 'The card payment failed.', raw=body)
+        # The gateway's own text stays in the raw payload for staff
+        return QueryResult('failed', reason='The card payment failed.', raw=body)
     # abandoned / ongoing / pending / processing / queued: the attendee may still finish on Paystack
     return QueryResult('pending', raw=body)
 

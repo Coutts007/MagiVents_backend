@@ -4,7 +4,7 @@ import time
 
 import anthropic
 
-from .base import AssistantError, AssistantProvider, Usage
+from .base import SERVER_ERROR, AssistantError, AssistantProvider, Usage
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ class ClaudeProvider(AssistantProvider):
             with self.client.beta.messages.stream(**params) as stream:
                 for event in stream:
                     if time.monotonic() > deadline:
-                        raise AssistantError('The assistant took too long to answer. Please try again.', 'timeout', 504)
+                        raise AssistantError(SERVER_ERROR, 'timeout', 504)
                     if event.type == 'content_block_start' and getattr(event.content_block, 'type', '') == 'fallback':
                         # Another model takes over from the start: whatever streamed so far is discarded
                         yield 'reset', None
@@ -57,25 +57,24 @@ class ClaudeProvider(AssistantProvider):
             raise
         except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
             logger.error('The AI provider rejected the API key (AI_API_KEY)')
-            raise AssistantError('The assistant is not set up correctly on the server. Please tell MagiVents.',
+            raise AssistantError(SERVER_ERROR,
                                  'provider_auth', 503, retryable=False)
         except anthropic.RateLimitError:
-            raise AssistantError('The assistant is busy right now. Please try again in a minute.', 'provider_rate_limited', 503)
+            raise AssistantError(SERVER_ERROR, 'provider_rate_limited', 503)
         except anthropic.APITimeoutError:
-            raise AssistantError('The assistant took too long to answer. Please try again.', 'timeout', 504)
+            raise AssistantError(SERVER_ERROR, 'timeout', 504)
         except anthropic.BadRequestError as exc:
             logger.error('The AI provider refused the request: %s', exc.message)
             if 'workspace' in exc.message.lower() or 'api key' in exc.message.lower():
                 # A setup problem (e.g. AI_WORKSPACE_ID missing), not something the organizer can fix
-                raise AssistantError('The assistant is not set up correctly on the server. Please tell MagiVents.',
+                raise AssistantError(SERVER_ERROR,
                                      'provider_auth', 503, retryable=False)
-            raise AssistantError('The assistant could not handle that request. Please try again, or tell MagiVents '
-                                 'if it keeps happening.', 'provider_rejected', 502)
+            raise AssistantError(SERVER_ERROR, 'provider_rejected', 502)
         except anthropic.APIStatusError as exc:
             logger.warning('AI provider error %s', exc.status_code)
-            raise AssistantError('The assistant is unavailable right now. Please try again shortly.', 'provider_unavailable', 503)
+            raise AssistantError(SERVER_ERROR, 'provider_unavailable', 503)
         except anthropic.APIConnectionError:
-            raise AssistantError('The assistant is unavailable right now. Please try again shortly.', 'provider_unavailable', 503)
+            raise AssistantError(SERVER_ERROR, 'provider_unavailable', 503)
 
         if message.stop_reason == 'refusal':
             raise AssistantError('The assistant cannot help with that request.', 'refused', 422, retryable=False)

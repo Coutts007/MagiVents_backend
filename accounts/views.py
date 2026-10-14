@@ -74,7 +74,8 @@ class GoogleAuthView(APIView):
 
         if not settings.GOOGLE_OAUTH_CLIENT_ID:
             return Response(
-                {'error': 'Google sign-in is not configured on the server (GOOGLE_OAUTH_CLIENT_ID).'},
+                # The missing setting is for the server log, not for users
+                {'error': 'Server error.'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 

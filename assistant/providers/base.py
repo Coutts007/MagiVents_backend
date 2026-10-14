@@ -7,6 +7,10 @@ assistant/providers/__init__.py.
 from dataclasses import dataclass, field
 
 
+# What organizers see for any failure on the server's side; details go to the server log only
+SERVER_ERROR = 'Server error.'
+
+
 class AssistantError(Exception):
     """A failure the organizer can be told about. `code` is stable for the frontend."""
 

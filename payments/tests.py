@@ -464,3 +464,17 @@ class MissingCredentialsTests(LifecycleBase):
                                                   'quantity': 1, 'attendeeName': 'A', 'attendeeEmail': 'a@x.com'},
                                format='json')
         self.assertEqual(res.data['status'], 'confirmed')
+
+
+
+class PublicFailureReasonTests(APITestCase):
+    def test_attendees_only_see_messages_written_for_them(self):
+        from payments.serializers import public_failure_reason
+        payment = Payment(failure_reason='The M-Pesa PIN was wrong.')
+        self.assertEqual(public_failure_reason(payment), 'The M-Pesa PIN was wrong.')
+        for internal in ('Paid KSh 499 but KSh 500 was due.', 'DS timeout user cannot be reached', 'Declined by issuer 05',
+                         'Replaced by a new payment attempt.'):
+            payment.failure_reason = internal
+            self.assertEqual(public_failure_reason(payment), 'The payment was not completed.')
+        payment.failure_reason = ''
+        self.assertIsNone(public_failure_reason(payment))

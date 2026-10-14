@@ -156,7 +156,8 @@ class DarajaStkProvider(PaymentProvider):
             # The query has no amount or receipt; an STK prompt can only charge the amount we requested
             return QueryResult('succeeded', amount=payment.amount, provider_reference=payment.provider_reference,
                                raw=data)
-        return QueryResult('failed', reason=STK_RESULT_MESSAGES.get(code, data.get('ResultDesc', '')), raw=data)
+        # Unknown codes get the generic message; Safaricom's own text stays in the raw payload for staff
+        return QueryResult('failed', reason=STK_RESULT_MESSAGES.get(code, ''), raw=data)
 
     def instructions(self, payment):
         return {'phoneNumber': payment.phone_number}

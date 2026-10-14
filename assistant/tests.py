@@ -203,8 +203,7 @@ class ProviderFailureTests(AssistantTestCase):
             events = events_of(res)
         self.assertEqual(len(provider.requests), 2)
         self.assertIn('reset', [e for e, _ in events])
-        self.assertEqual(events[-1], ('error', {'error': 'The assistant gave an answer that could not be read. Please try again.',
-                                                'code': 'bad_output', 'retryable': True}))
+        self.assertEqual(events[-1], ('error', {'error': 'Server error.', 'code': 'bad_output', 'retryable': True}))
 
     def test_retry_recovers(self):
         provider = ScriptedProvider('{"reply": 12}', answer('Fixed', [suggestion('title', text='Karura Run')]))
@@ -352,3 +351,23 @@ class SafetyTests(AssistantTestCase):
                                       'tags', 'tiers', 'hostName', 'isFree'}, set())
         self.assertEqual(form['tags'], ['running', 'charity'])
         self.assertEqual(form['tiers'][0]['price'], 1500)
+
+
+class ShortErrorMessagesTests(AssistantTestCase):
+    def test_server_side_failures_say_only_server_error(self):
+        for code in ('provider_auth', 'provider_unavailable', 'timeout'):
+            with self.use(ScriptedProvider(AssistantError(__import__('assistant.providers', fromlist=['SERVER_ERROR']).SERVER_ERROR, code))):
+                res = self.ask(action='titles')
+            self.assertEqual(res.data['error'], 'Server error.')
+
+    def test_unexpected_errors_are_json_without_details(self):
+        with mock.patch('assistant.views.run_turn', side_effect=RuntimeError('database password is hunter2')), \
+                self.assertLogs('django.request', 'ERROR'):
+            res = self.ask(action='titles')
+        self.assertEqual((res.status_code, res.json()), (500, {'error': 'Server error.'}))
+
+    @override_settings(GOOGLE_OAUTH_CLIENT_ID='')
+    def test_configuration_is_not_revealed(self):
+        self.client.force_authenticate(None)
+        res = self.client.post('/api/auth/google/', {'credential': 'x'}, format='json')
+        self.assertEqual((res.status_code, res.data['error']), (503, 'Server error.'))
