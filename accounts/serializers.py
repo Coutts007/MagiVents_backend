@@ -12,10 +12,13 @@ class UserProfileSerializer(serializers.ModelSerializer):
     avatarUrl = serializers.CharField(required=False, allow_blank=True)
     joinedDate = serializers.SerializerMethodField()
     authProvider = serializers.CharField(source='auth_provider', read_only=True)
+    isSuspended = serializers.BooleanField(source='is_suspended', read_only=True)
+    suspensionReason = serializers.CharField(source='suspension_reason', read_only=True)
 
     class Meta:
         model = User
-        fields = ['id', 'name', 'email', 'avatarUrl', 'bio', 'city', 'role', 'joinedDate', 'authProvider']
+        fields = ['id', 'name', 'email', 'avatarUrl', 'bio', 'city', 'role', 'joinedDate', 'authProvider',
+                  'isSuspended', 'suspensionReason']
         read_only_fields = ['role']
 
     def get_joinedDate(self, obj) -> str:

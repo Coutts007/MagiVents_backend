@@ -66,6 +66,28 @@ class Gathering(models.Model):
     curator_note = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._loaded_status = None if self._state.adding else self.status
+
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        instance = super().from_db(db, field_names, values)
+        instance._loaded_status = instance.status
+        return instance
+
+    @property
+    def is_public(self):
+        return self.status in ('published', 'sold_out')
+
+    def save(self, *args, **kwargs):
+        # Backstop: a draft (or a new event) never becomes public without passing the publish rules
+        if self.is_public and self._loaded_status in (None, 'draft'):
+            from .publishing import ensure_publishable
+            ensure_publishable(self)
+        super().save(*args, **kwargs)
+        self._loaded_status = self.status
+
     def __str__(self):
         return self.title
 

@@ -189,7 +189,8 @@ class BecomeOrganizerView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        if request.user.role != 'curator':
+        # Only attendees are upgraded; an admin is never turned into a plain organizer
+        if request.user.role == 'patron':
             request.user.role = 'curator'
             request.user.save(update_fields=['role'])
         return Response(UserProfileSerializer(request.user, context={'request': request}).data)

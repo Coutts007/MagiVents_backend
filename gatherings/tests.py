@@ -200,3 +200,31 @@ class TierEditorAndRoleTests(APITestCase):
         # Replace (not mutate) the nested pricing, which is shared with the SEED fixture
         payload['pricing'] = {**payload['pricing'], 'tiers': [{'id': '', 'name': 'Oops', 'price': 0, 'quantity': 10}]}
         self.assertEqual(self.client.post('/api/gatherings/', payload, format='json').status_code, 400)
+
+
+class SuspendedOrganizerTests(APITestCase):
+    def setUp(self):
+        self.organizer = User.objects.create_user(username='s@x.com', email='s@x.com', password='pw-Susp-123',
+                                                  role='curator')
+        self.client.force_authenticate(self.organizer)
+        self.draft_id = self.client.post('/api/gatherings/', event_payload(status='draft'), format='json').data['id']
+        self.organizer.is_suspended = True
+        self.organizer.save()
+
+    def test_cannot_create(self):
+        res = self.client.post('/api/gatherings/', event_payload(), format='json')
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.data['code'], 'organizer_suspended')
+
+    def test_cannot_publish_but_still_sees_own_events(self):
+        res = self.client.patch(f'/api/gatherings/{self.draft_id}/', {'status': 'published'}, format='json')
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(Gathering.objects.get(id=self.draft_id).status, 'draft')
+        event = self.client.get(f'/api/gatherings/{self.draft_id}/').data
+        event['status'] = 'published'
+        self.assertEqual(self.client.put(f'/api/gatherings/{self.draft_id}/', event, format='json').status_code, 403)
+        mine = self.client.get('/api/gatherings/my_gatherings/')
+        self.assertEqual([e['id'] for e in mine.data], [self.draft_id])
+        # Editing a draft is still allowed
+        self.assertEqual(self.client.patch(f'/api/gatherings/{self.draft_id}/', {'title': 'Renamed'},
+                                           format='json').status_code, 200)

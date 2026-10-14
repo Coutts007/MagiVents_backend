@@ -92,3 +92,56 @@ class GoogleAuthTests(APITestCase):
     def test_unconfigured_server(self):
         res = self.client.post('/api/auth/google/', {'credential': 'anything'}, format='json')
         self.assertEqual(res.status_code, 503)
+
+
+class RoleTests(APITestCase):
+    def test_admin_role_follows_is_staff_and_superusers(self):
+        root = User.objects.create_superuser(username='root@x.com', email='root@x.com', password='pw-Root-123')
+        self.assertEqual((root.role, root.is_staff), ('admin', True))
+
+        user = User.objects.create_user(username='u@x.com', email='u@x.com', password='pw-User-123')
+        user.role = 'admin'
+        user.save(update_fields=['role'])
+        user.refresh_from_db()
+        self.assertTrue(user.is_staff)
+
+        # Unticking "staff status" in the Django admin demotes; ticking it promotes
+        user.is_staff = False
+        user.save()
+        self.assertEqual(user.role, 'patron')
+        user.is_staff = True
+        user.save()
+        self.assertEqual(User.objects.get(pk=user.pk).role, 'admin')
+
+        staff = User.objects.create_user(username='s@x.com', email='s@x.com', password='pw-Staff-123', is_staff=True)
+        self.assertEqual(staff.role, 'admin')
+
+    def test_become_organizer_never_demotes_an_admin(self):
+        admin = User.objects.create_user(username='a@x.com', email='a@x.com', password='pw-Admin-123', role='admin')
+        self.client.force_authenticate(admin)
+        res = self.client.post('/api/auth/become-organizer/')
+        self.assertEqual(res.data['role'], 'admin')
+        self.assertTrue(User.objects.get(pk=admin.pk).is_staff)
+
+    def test_data_migration_makes_staff_admins_and_owners_organizers(self):
+        import importlib
+        from django.apps import apps
+        from gatherings.models import Gathering
+
+        staff = User.objects.create_user(username='st@x.com', email='st@x.com', password='pw-Staff-123')
+        owner = User.objects.create_user(username='ow@x.com', email='ow@x.com', password='pw-Owner-123')
+        User.objects.filter(pk=staff.pk).update(is_staff=True, role='patron')
+        Gathering.objects.create(organizer=owner, title='Old', category='Others', description='d', date_display='d',
+                                 iso_date='2030-01-01', time_display='t', venue_name='v', status='draft')
+        User.objects.filter(pk=owner.pk).update(role='patron')
+
+        importlib.import_module('accounts.migrations.0004_sync_admins_and_organizers').forwards(apps, None)
+        self.assertEqual(User.objects.get(pk=staff.pk).role, 'admin')
+        self.assertEqual(User.objects.get(pk=owner.pk).role, 'curator')
+
+    def test_profile_reports_suspension(self):
+        user = User.objects.create_user(username='c@x.com', email='c@x.com', password='pw-Cur-12345', role='curator',
+                                        is_suspended=True, suspension_reason='Unpaid venue')
+        self.client.force_authenticate(user)
+        res = self.client.get('/api/auth/profile/')
+        self.assertEqual((res.data['isSuspended'], res.data['suspensionReason']), (True, 'Unpaid venue'))

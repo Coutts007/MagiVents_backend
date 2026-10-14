@@ -15,6 +15,7 @@ from tickets.models import Booking
 from tickets.serializers import CheckInSerializer, attendee_row, normalize_ticket_code
 
 from .models import Gathering
+from .publishing import OrganizerSuspended, suspended_message
 from .serializers import GatheringSerializer
 
 UUID_RE = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.I)
@@ -44,7 +45,10 @@ class IsOrganizerRoleToCreate(permissions.BasePermission):
     def has_permission(self, request, view):
         if view.action != 'create':
             return True
-        return bool(request.user and request.user.is_authenticated and request.user.is_organizer)
+        user = request.user
+        if user and user.is_authenticated and user.is_suspended:
+            raise OrganizerSuspended(suspended_message())
+        return bool(user and user.is_authenticated and user.is_organizer)
 
 
 class GatheringViewSet(viewsets.ModelViewSet):
