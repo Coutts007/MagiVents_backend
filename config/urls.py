@@ -109,6 +109,8 @@ urlpatterns = [
     # Listing fee (pay to publish), per event; must come before the router's gatherings/<pk>/ routes
     path('api/gatherings/<str:gathering_id>/listing-fee/', ListingFeeView.as_view(), name='listing_fee'),
     path('api/gatherings/<str:gathering_id>/listing-fee/pay/', PayListingFeeView.as_view(), name='listing_fee_pay'),
+    # AI assistant for the event form (organizers; streamed as server-sent events)
+    path('api/assistant/', include('assistant.urls')),
     # In-app notifications (the navbar bell)
     path('api/notifications/', include('notifications.urls')),
 
