@@ -307,6 +307,8 @@ class TicketDeliveryTests(APITestCase):
 from datetime import datetime, timedelta, timezone as dt_timezone
 from unittest import mock
 
+from django.core.cache import cache
+
 from gatherings.models import TicketTier
 from gatherings.tests import event_payload
 from tickets.models import PromoCode
@@ -317,6 +319,9 @@ T0 = datetime(2030, 3, 1, 9, 0, tzinfo=dt_timezone.utc)
 @override_settings(PAYMENTS_SIMULATED_DELAY_SECONDS=0)
 class TierTypeBookingTests(APITestCase):
     def setUp(self):
+        # Guest bookings are rate limited per IP in the (shared) cache
+        cache.clear()
+        self.addCleanup(cache.clear)
         self.organizer = User.objects.create_user(username='o@x.com', email='o@x.com', password='pw-Org-12345',
                                                   role='curator')
         self.client.force_authenticate(self.organizer)

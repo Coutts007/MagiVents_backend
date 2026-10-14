@@ -76,3 +76,25 @@ class EventPayoutDetailsView(APIView):
         gathering = own_gathering_or_403(request, gathering_id)
         PayoutAccount.objects.filter(gathering=gathering).delete()
         return Response(self._payload(gathering))
+
+
+@extend_schema(responses=OpenApiTypes.OBJECT)
+class MyEarningsView(APIView):
+    """The organizer's earnings per event (confirmed bookings, after discounts), payouts received and balance."""
+    permission_classes = [IsOrganizerAccount]
+
+    def get(self, request):
+        from .ledger import event_earnings, organizer_totals
+        from .models import Payout
+        return Response({
+            **organizer_totals(request.user),
+            'events': event_earnings(request.user),
+            'payouts': [{
+                'id': p.id, 'amount': float(p.amount), 'reference': p.reference, 'paidOn': p.paid_on.isoformat(),
+                'note': p.note, 'sentTo': p.sent_to,
+            } for p in Payout.objects.filter(organizer=request.user)],
+            'details': payout_account_payload(self._details(request.user)),
+        })
+
+    def _details(self, user):
+        return PayoutAccount.objects.filter(organizer=user, gathering__isnull=True).first()

@@ -27,6 +27,8 @@ ADMIN_ENDPOINTS = [
     ('delete', '/api/admin/organizers/{org}/payment-details/'),
     ('post', '/api/admin/organizers/{org}/suspend/'),
     ('post', '/api/admin/organizers/{org}/reactivate/'),
+    ('get', '/api/admin/organizers/{org}/payouts/'),
+    ('post', '/api/admin/organizers/{org}/payouts/'),
     ('get', '/api/admin/category-fees/'),
     ('put', '/api/admin/category-fees/'),
     ('get', '/api/admin/platform-payment/'),

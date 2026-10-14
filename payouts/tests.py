@@ -136,3 +136,90 @@ class PaymentDetailsArePrivateTests(APITestCase):
             assert_clean(self.client.get('/api/gatherings/'))
             assert_clean(self.client.get(f'/api/gatherings/{event_id}/'))
             assert_clean(self.client.get('/api/gatherings/', {'search': 'Secret'}))
+
+
+# --- Earnings ledger and payouts (Part 6) ---------------------------------------------------------------
+from datetime import date, timedelta
+
+from django.core.cache import cache
+from django.test import override_settings
+
+from payouts.models import Payout
+from tickets.models import Booking, PromoCode
+
+
+@override_settings(PAYMENTS_SIMULATED_DELAY_SECONDS=0)
+class EarningsAndPayoutsTests(APITestCase):
+    def setUp(self):
+        # Guest bookings are rate limited per IP in the (shared) cache
+        cache.clear()
+        self.addCleanup(cache.clear)
+        self.admin = User.objects.create_user(username='a@x.com', email='a@x.com', password='pw-Adm-12345', role='admin')
+        self.organizer = User.objects.create_user(username='o@x.com', email='o@x.com', password='pw-Org-12345',
+                                                  role='curator')
+        give_payout_details(self.organizer)
+        self.client.force_authenticate(self.organizer)
+        res = self.client.post('/api/gatherings/', event_payload(), format='json')
+        self.event_id = res.data['id']
+        self.tier = res.data['pricing']['tiers'][0]
+        self.client.patch(f'/api/gatherings/{self.event_id}/', {'status': 'published'}, format='json')
+        PromoCode.objects.create(code='HALF', percent_off=50, gathering_id=self.event_id)
+        self.client.force_authenticate(None)
+        price = int(self.tier['price'])
+        self.book(quantity=2)                               # 2 × price
+        self.book(promoCode='HALF')                         # half price
+        self.book(mpesaPhoneNumber='0712341032')            # failed payment: not earned
+        with override_settings(PAYMENTS_SIMULATED_DELAY_SECONDS=600):
+            self.book()                                     # still pending: not earned
+        self.expected = 2 * price + price - round(price * 0.5)
+
+    def book(self, quantity=1, **extra):
+        res = self.client.post('/api/bookings/', {
+            'eventId': self.event_id, 'tierId': self.tier['id'], 'quantity': quantity, 'attendeeName': 'Guest',
+            'attendeeEmail': 'g@x.com', 'paymentMethod': 'mpesa', 'mpesaPhoneNumber': '0712345678', **extra}, format='json')
+        self.assertEqual(res.status_code, 201, res.data)
+        return res
+
+    def payout(self, amount, **extra):
+        self.client.force_authenticate(self.admin)
+        return self.client.post(f'/api/admin/organizers/{self.organizer.id}/payouts/', {
+            'amount': amount, 'reference': 'QX99', 'paidOn': date.today().isoformat(), 'note': 'Weekly', **extra},
+            format='json')
+
+    def test_earnings_come_from_confirmed_bookings_after_discounts(self):
+        self.assertEqual(Booking.objects.filter(status='confirmed').count(), 2)
+        self.client.force_authenticate(self.organizer)
+        summary = self.client.get('/api/payouts/summary/').data
+        self.assertEqual((summary['earnings'], summary['payoutsTotal'], summary['balance']),
+                         (self.expected, 0.0, self.expected))
+        event = next(e for e in summary['events'] if e['eventId'] == self.event_id)
+        self.assertEqual((event['earnings'], event['ticketsSold'], event['people']), (self.expected, 3, 3))
+        self.assertEqual(summary['details']['summary'], 'M-Pesa 0712 345 678')
+
+    def test_payout_never_exceeds_the_balance_and_both_sides_update(self):
+        self.assertEqual(self.payout(self.expected + 1).status_code, 400)
+        self.assertEqual(self.payout(10.5).status_code, 400)
+        self.assertEqual(self.payout(100, paidOn=(date.today() + timedelta(days=1)).isoformat()).status_code, 400)
+        res = self.payout(1000)
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertEqual((res.data['balance'], res.data['payout']['sentTo']), (self.expected - 1000, 'M-Pesa 0712 345 678'))
+        self.assertEqual(self.payout(self.expected - 1000).status_code, 201)
+        self.assertEqual(self.payout(1).status_code, 400)
+        self.assertEqual(Payout.objects.count(), 2)
+
+        overview = self.client.get('/api/admin/overview/').data
+        self.assertEqual(overview['balancesOutstanding'], 0.0)
+        row = next(o for o in self.client.get('/api/admin/organizers/').data['results'] if o['id'] == str(self.organizer.id))
+        self.assertEqual((row['earnings'], row['payoutsTotal'], row['balance']), (self.expected, self.expected, 0.0))
+
+        self.client.force_authenticate(self.organizer)
+        summary = self.client.get('/api/payouts/summary/').data
+        self.assertEqual((summary['balance'], len(summary['payouts'])), (0.0, 2))
+
+    def test_balance_shows_on_the_admin_overview(self):
+        self.payout(500)
+        self.assertEqual(self.client.get('/api/admin/overview/').data['balancesOutstanding'], self.expected - 500)
+
+    def test_only_organizers_see_earnings(self):
+        self.client.force_authenticate(User.objects.create_user(username='p@x.com', email='p@x.com', password='pw-Pat-12345'))
+        self.assertEqual(self.client.get('/api/payouts/summary/').status_code, 403)

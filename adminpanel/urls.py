@@ -11,6 +11,7 @@ urlpatterns = [
     path('organizers/<int:user_id>/payment-details/', views.OrganizerPaymentDetailsView.as_view()),
     path('organizers/<int:user_id>/suspend/', views.SuspendOrganizerView.as_view()),
     path('organizers/<int:user_id>/reactivate/', views.ReactivateOrganizerView.as_view()),
+    path('organizers/<int:user_id>/payouts/', views.OrganizerPayoutsView.as_view()),
     path('category-fees/', views.CategoryFeesView.as_view()),
     path('platform-payment/', views.PlatformPaymentView.as_view()),
     path('listing-fees/', views.ListingFeeListView.as_view()),

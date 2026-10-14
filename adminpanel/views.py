@@ -575,3 +575,34 @@ def payout_row(p):
         'createdAt': p.created_at.isoformat(),
     }
 
+
+
+class PayoutSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=1)
+    reference = serializers.CharField(max_length=120, trim_whitespace=True)
+    paidOn = serializers.DateField()
+    note = serializers.CharField(max_length=1000, required=False, allow_blank=True)
+
+
+@extend_schema(request=PayoutSerializer, responses=OpenApiTypes.OBJECT)
+class OrganizerPayoutsView(AdminView):
+    """Payouts made to an organizer. Record one once the money has been sent (it cannot exceed the balance)."""
+
+    def get(self, request, user_id):
+        from payouts.ledger import organizer_totals
+        from payouts.models import Payout
+        user = get_organizer(user_id)
+        return Response({**organizer_totals(user), 'payouts': [payout_row(p) for p in Payout.objects.filter(organizer=user)]})
+
+    def post(self, request, user_id):
+        from payouts.ledger import organizer_totals
+        from payouts.services import record_payout
+        user = get_organizer(user_id)
+        data = PayoutSerializer(data=request.data)
+        data.is_valid(raise_exception=True)
+        values = data.validated_data
+        payout = record_payout(user.id, values['amount'], values['reference'], values['paidOn'],
+                               values.get('note', ''), request.user)
+        log_action(request, 'record_payout', 'user', user.id, user.email,
+                   f"KSh {payout.amount:,.0f}, ref {payout.reference}" + (f": {payout.note}" if payout.note else ''))
+        return Response({'payout': payout_row(payout), **organizer_totals(user)}, status=status.HTTP_201_CREATED)
