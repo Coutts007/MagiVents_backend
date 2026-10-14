@@ -1,9 +1,11 @@
+import json
 import logging
 
 from django.http import StreamingHttpResponse
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import permissions, serializers
+from rest_framework.renderers import BaseRenderer, JSONRenderer
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
@@ -32,6 +34,17 @@ class CanUseAssistant(permissions.BasePermission):
         return True
 
 
+class EventStreamRenderer(BaseRenderer):
+    """Lets the browser ask for text/event-stream. The stream itself is a StreamingHttpResponse; this only
+    renders the JSON errors returned before a stream starts."""
+    media_type = 'text/event-stream'
+    format = 'sse'
+    charset = 'utf-8'
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        return json.dumps(data).encode()
+
+
 class MessageSerializer(serializers.Serializer):
     role = serializers.ChoiceField(choices=['user', 'assistant'])
     content = serializers.CharField(max_length=8000, allow_blank=True, trim_whitespace=False)
@@ -48,6 +61,7 @@ class EventAssistantView(APIView):
     """Suggestions for the event form, streamed as server-sent events (see assistant/services.py).
     Errors before the stream starts are plain JSON: {error, code, retryable}."""
     permission_classes = [CanUseAssistant]
+    renderer_classes = [JSONRenderer, EventStreamRenderer]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = 'assistant'
 

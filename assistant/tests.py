@@ -126,6 +126,17 @@ class MockProviderTests(AssistantTestCase):
         self.assertTrue(all(s['label'].startswith('Sample') for s in titles))
         self.assertTrue(done['sample'])
 
+    def test_browsers_asking_for_an_event_stream_get_one(self):
+        res = self.client.post(URL, {'formState': FORM, 'action': 'tags'}, format='json', HTTP_ACCEPT='text/event-stream')
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res['Content-Type'].startswith('text/event-stream'))
+        self.assertEqual(events_of(res)[-1][0], 'done')
+        # Errors before the stream starts are still JSON the panel can read
+        self.client.force_authenticate(None)
+        res = self.client.post(URL, {'action': 'tags'}, format='json', HTTP_ACCEPT='text/event-stream')
+        self.assertEqual(res.status_code, 401)
+        self.assertIn('detail', json.loads(res.content))
+
     def test_every_quick_action_returns_valid_suggestions(self):
         for action, field in [('description', 'description'), ('agenda', 'agenda'), ('tagline', 'tagline'),
                               ('tags', 'tags'), ('tiers', 'tiers'), ('attendeeNote', 'attendeeNote')]:

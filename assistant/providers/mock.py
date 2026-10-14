@@ -4,6 +4,7 @@ sample; the suggestions are filled in from what the organizer already typed, and
 real model's answer.
 """
 import json
+import re
 import time
 
 from .base import AssistantProvider, Usage
@@ -72,8 +73,12 @@ class MockProvider(AssistantProvider):
 
     @staticmethod
     def _idea_phrase(idea):
-        words = (idea or '').strip().rstrip('.').split()
-        return ' '.join(words[:6]).capitalize() if words else ''
+        # The first clause, at most 8 words, without a dangling "in", "for", "at"...
+        words = re.split(r'[,.;:!?]', (idea or '').strip())[0].split()[:8]
+        while words and words[-1].lower() in {'a', 'an', 'the', 'in', 'at', 'on', 'for', 'of', 'to', 'and', 'with'}:
+            words.pop()
+        phrase = ' '.join(words)
+        return phrase[:1].upper() + phrase[1:]
 
     def titles(self, subject, form):
         city = form.get('venueCity') or 'Nairobi'
