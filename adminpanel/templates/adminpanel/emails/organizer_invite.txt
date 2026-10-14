@@ -1,0 +1,16 @@
+Hello {{ name }},
+
+A MagiVents administrator has created an organizer account for you, so you can list events and sell
+tickets on MagiVents.
+
+Set your password here (the link works once and expires in {{ days }} day{{ days|pluralize }}):
+{{ link }}
+
+Then sign in at {{ frontend_url }} with this email address.
+
+Before you publish an event with paid tickets, add your payment details in your profile: MagiVents
+collects ticket payments and pays out your sales to those details.
+
+Questions? Write to {{ contact_email }}.
+
+MagiVents

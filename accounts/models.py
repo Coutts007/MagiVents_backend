@@ -35,8 +35,9 @@ class User(AbstractUser):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Remembered so save() knows whether the role or the staff flag was the one that changed
-        self._loaded_role, self._loaded_is_staff = self.role, self.is_staff
+        # Remembered so save() knows whether the role or the staff flag was the one that changed.
+        # Read from __dict__ so deferred fields are not loaded (that would query, and recurse).
+        self._loaded_role, self._loaded_is_staff = self.__dict__.get('role'), self.__dict__.get('is_staff')
 
     def save(self, *args, **kwargs):
         self.sync_admin_role()
@@ -49,6 +50,8 @@ class User(AbstractUser):
 
     def sync_admin_role(self):
         """role == 'admin' <=> is_staff. Whichever of the two was changed decides; superusers are always admins."""
+        if self._loaded_role is None and not self._state.adding and not self.is_superuser:
+            return  # Loaded without these fields; nothing to compare against
         if self.is_superuser:
             self.role, self.is_staff = 'admin', True
         elif self.role != self._loaded_role or self._state.adding and self.role == 'admin':

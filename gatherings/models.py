@@ -74,7 +74,9 @@ class Gathering(models.Model):
     @classmethod
     def from_db(cls, db, field_names, values):
         instance = super().from_db(db, field_names, values)
-        instance._loaded_status, instance._loaded_category = instance.status, instance.category
+        # Deferred fields (e.g. rows the delete collector loads) are not read, which would query again
+        instance._loaded_status = instance.__dict__.get('status')
+        instance._loaded_category = instance.__dict__.get('category')
         return instance
 
     @property

@@ -84,6 +84,7 @@ INSTALLED_APPS = [
    'payouts',
    'notifications',
    'listings',
+   'adminpanel',
 
 ]
 

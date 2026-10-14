@@ -19,6 +19,7 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from django.views.generic import RedirectView
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
@@ -68,7 +69,9 @@ urlpatterns = [
     path('api/auth/password/change/', PasswordChangeView.as_view(), name='password_change_api'),
     path('api/auth/password/reset/', PasswordResetView.as_view(), name='password_reset_api'),
     path('api/auth/become-organizer/', BecomeOrganizerView.as_view(), name='become_organizer'),
-    # Django's built-in pages that the password reset email links to
+    # Django's built-in pages that the password reset (and organizer invite) emails link to. Once the password
+    # is set, people go back to the app to sign in.
+    path('accounts/reset/done/', RedirectView.as_view(url=f"{settings.FRONTEND_URL.rstrip('/')}/?signin=1")),
     path('accounts/', include('django.contrib.auth.urls')),
 
     # Bookmarks
@@ -98,7 +101,8 @@ urlpatterns = [
     path('api/tickets/<uuid:booking_id>/pdf/', TicketPdfView.as_view(), name='ticket_pdf'),
     path('api/tickets/<uuid:booking_id>/resend/', TicketResendView.as_view(), name='ticket_resend'),
 
-    # Gathering & Booking Resources
+    # Admin dashboard: role-based, 403 for anyone who is not an admin
+    path('api/admin/', include('adminpanel.urls')),
     # Staff console: secret path + staff account; anything else is a plain 404
     path('api/console/', include('console.urls')),
 

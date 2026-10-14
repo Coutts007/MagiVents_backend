@@ -64,3 +64,28 @@ def payout_account_for(gathering):
     if override is not None:
         return override
     return PayoutAccount.objects.filter(organizer_id=gathering.organizer_id, gathering__isnull=True).first()
+
+
+class Payout(models.Model):
+    """Money the platform has sent an organizer, recorded by an admin after sending it.
+
+    Payouts are made by hand today. Automated payouts (Daraja B2C, or card-gateway split payments) would plug
+    in at payouts/automated.py and create these same records.
+    """
+    organizer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='payouts_received')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    # The transfer's reference, e.g. the M-Pesa or bank transaction code
+    reference = models.CharField(max_length=120)
+    paid_on = models.DateField()
+    note = models.TextField(blank=True, default='')
+    # The payment details the money was sent to, as they were at the time
+    sent_to = models.CharField(max_length=255, blank=True, default='')
+    recorded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+                                    related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-paid_on', '-created_at']
+
+    def __str__(self):
+        return f'KSh {self.amount:,.0f} to {self.organizer} on {self.paid_on}'
