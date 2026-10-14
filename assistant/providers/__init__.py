@@ -11,7 +11,8 @@ def get_provider():
         return MockProvider()
     if settings.AI_PROVIDER == 'anthropic':
         from .claude import ClaudeProvider
-        return ClaudeProvider(settings.AI_API_KEY, settings.AI_MODEL, settings.AI_TIMEOUT_SECONDS)
+        return ClaudeProvider(settings.AI_API_KEY, settings.AI_MODEL, settings.AI_TIMEOUT_SECONDS,
+                              settings.AI_WORKSPACE_ID)
     raise AssistantError('The assistant is not set up correctly on the server.', 'provider_unknown', 503, retryable=False)
 
 

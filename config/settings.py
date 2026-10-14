@@ -189,6 +189,8 @@ if AI_PROVIDER not in ('anthropic', 'mock'):
     raise ImproperlyConfigured("AI_PROVIDER must be 'anthropic' or 'mock'.")
 AI_API_KEY = os.environ.get('AI_API_KEY', '')
 AI_MODEL = os.environ.get('AI_MODEL', '') or 'claude-opus-5-5'
+# Needed only for an API key that is not scoped to a workspace: the Anthropic workspace to use (wrkspc_...)
+AI_WORKSPACE_ID = os.environ.get('AI_WORKSPACE_ID', '').strip()
 AI_REQUESTS_PER_HOUR = int(os.environ.get('AI_REQUESTS_PER_HOUR', '60'))
 AI_TIMEOUT_SECONDS = int(os.environ.get('AI_TIMEOUT_SECONDS', '30'))
 

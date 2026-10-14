@@ -16,11 +16,13 @@ MAX_TOKENS = 8000
 class ClaudeProvider(AssistantProvider):
     name = 'anthropic'
 
-    def __init__(self, api_key, model, timeout):
+    def __init__(self, api_key, model, timeout, workspace_id=''):
         self.model = model
         self.timeout = timeout
+        # A key that is not scoped to one workspace must name the workspace on every request
+        headers = {'anthropic-workspace-id': workspace_id} if workspace_id else None
         # One retry at most, so a failing call is reported well within the organizer's patience
-        self.client = anthropic.Anthropic(api_key=api_key, timeout=timeout, max_retries=1)
+        self.client = anthropic.Anthropic(api_key=api_key, timeout=timeout, max_retries=1, default_headers=headers)
 
     def stream(self, request):
         params = {
@@ -63,7 +65,12 @@ class ClaudeProvider(AssistantProvider):
             raise AssistantError('The assistant took too long to answer. Please try again.', 'timeout', 504)
         except anthropic.BadRequestError as exc:
             logger.error('The AI provider refused the request: %s', exc.message)
-            raise AssistantError('The assistant could not handle that request. Try rephrasing it.', 'provider_rejected', 502)
+            if 'workspace' in exc.message.lower() or 'api key' in exc.message.lower():
+                # A setup problem (e.g. AI_WORKSPACE_ID missing), not something the organizer can fix
+                raise AssistantError('The assistant is not set up correctly on the server. Please tell MagiVents.',
+                                     'provider_auth', 503, retryable=False)
+            raise AssistantError('The assistant could not handle that request. Please try again, or tell MagiVents '
+                                 'if it keeps happening.', 'provider_rejected', 502)
         except anthropic.APIStatusError as exc:
             logger.warning('AI provider error %s', exc.status_code)
             raise AssistantError('The assistant is unavailable right now. Please try again shortly.', 'provider_unavailable', 503)

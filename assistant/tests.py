@@ -239,6 +239,21 @@ class ProviderFailureTests(AssistantTestCase):
                     list(provider.stream(mock.Mock(system='s', messages=[], schema={})))
             self.assertEqual(caught.exception.code, code)
 
+    def test_workspace_header_and_setup_errors(self):
+        import anthropic
+        import httpx2
+        provider = ClaudeProvider('sk-test', 'claude-opus-5-5', 30, workspace_id='wrkspc_123')
+        self.assertEqual(provider.client.default_headers.get('anthropic-workspace-id'), 'wrkspc_123')
+        self.assertNotIn('anthropic-workspace-id', ClaudeProvider('sk-test', 'claude-opus-5-5', 30).client.default_headers)
+        request = httpx2.Request('POST', 'https://api.anthropic.com/v1/messages')
+        error = anthropic.BadRequestError(
+            'This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header',
+            response=httpx2.Response(400, request=request), body=None)
+        with mock.patch.object(provider.client.beta.messages, 'stream', side_effect=error):
+            with self.assertRaises(AssistantError) as caught:
+                list(provider.stream(mock.Mock(system='s', messages=[], schema={})))
+        self.assertEqual((caught.exception.code, caught.exception.retryable), ('provider_auth', False))
+
     def test_claude_request_uses_structured_output_and_streams(self):
         provider = ClaudeProvider('sk-test', 'claude-opus-5-5', 30)
         text = answer('Hi', [])
