@@ -1,5 +1,6 @@
-# Production stack: PostgreSQL, Redis, the API under Gunicorn, a worker that releases expired ticket
-# holds, and the frontend (nginx serving the built app and proxying /api to the API).
+# Production stack: PostgreSQL, Redis, the API under Gunicorn, the AI assistant under Gunicorn + Uvicorn (ASGI),
+# a worker that releases expired ticket holds, and the frontend (nginx serving the built app and proxying /api to
+# the API, /api/assistant/ to the assistant).
 #
 #   cp .env.example .env.production   # fill in secrets; set DJANGO_DEBUG=False
 #   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
@@ -11,6 +12,8 @@ services:
   db:
     image: postgres:15-alpine
     restart: unless-stopped
+    # Room for each API process's connection pool (POSTGRES_POOL_MAX_SIZE each) plus the holds worker
+    command: ["postgres", "-c", "max_connections=${POSTGRES_MAX_CONNECTIONS:-200}"]
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-magivents_db}
       POSTGRES_USER: ${POSTGRES_USER:-magivents_user}
@@ -37,7 +40,7 @@ services:
       REDIS_URL: redis://redis:6379/1
       BEHIND_PROXY: "True"
     # Apply migrations, then serve
-    command: sh -c "python manage.py migrate --noinput && exec gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 60 --access-logfile -"
+    command: sh -c "python manage.py migrate --noinput && exec gunicorn -c gunicorn_config.py"
     volumes:
       - media:/app/media
     depends_on:
@@ -45,6 +48,31 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  assistant:
+    # The AI event assistant (/api/assistant/, routed here by nginx). Same image as the API, served as ASGI so an
+    # answer streaming for several seconds holds no worker: a few processes keep thousands open at once.
+    build: .
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      POSTGRES_HOST: db
+      REDIS_URL: redis://redis:6379/1
+      BEHIND_PROXY: "True"
+      # The database is only used to check who is asking, so a small pool per process is plenty
+      POSTGRES_POOL_MAX_SIZE: ${ASSISTANT_POOL_MAX_SIZE:-4}
+    command: gunicorn -c gunicorn_assistant.py
+    # Every open answer holds two sockets (nginx and the AI provider)
+    ulimits:
+      nofile: 65535
+    depends_on:
+      api:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/')"]
       interval: 30s
@@ -73,12 +101,17 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+    ulimits:
+      nofile: 65535
     volumes:
       # Uploaded avatars and posters, when no S3 bucket is configured
       - media:/srv/media:ro
     depends_on:
       api:
         condition: service_healthy
+      # nginx sends /api/assistant/ here, and must find the service when it starts
+      assistant:
+        condition: service_started
 
 volumes:
   postgres_data:

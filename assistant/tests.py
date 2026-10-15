@@ -1,5 +1,7 @@
+import asyncio
 import json
 import logging
+import time
 from unittest import mock
 
 from django.core.cache import cache
@@ -45,7 +47,7 @@ class ScriptedProvider(AssistantProvider):
         self.answers = list(answers)
         self.requests = []
 
-    def stream(self, request):
+    async def stream(self, request):
         self.requests.append(request)
         answer = self.answers.pop(0)
         if isinstance(answer, Exception):
@@ -53,6 +55,17 @@ class ScriptedProvider(AssistantProvider):
         for i in range(0, len(answer), 7):
             yield 'text', answer[i:i + 7]
         yield 'done', Usage(input_tokens=1200, output_tokens=300, model='scripted-model')
+
+
+def collect(stream):
+    """Everything an async provider stream yields, from synchronous test code."""
+    async def run():
+        return [item async for item in stream]
+    return asyncio.run(run())
+
+
+def claude(client, **options):
+    return ClaudeProvider('sk-test', 'claude-opus-5-5', 30, client=client, **options)
 
 
 def answer(reply='Here you go.', suggestions=()):
@@ -230,44 +243,48 @@ class ProviderFailureTests(AssistantTestCase):
             (anthropic.InternalServerError('down', response=httpx2.Response(500, request=request), body=None), 'provider_unavailable'),
             (anthropic.APITimeoutError(request=request), 'timeout'),
             (anthropic.APIConnectionError(request=request), 'provider_unavailable'),
+            (httpx2.ReadTimeout('stalled'), 'timeout'),
+            (httpx2.RemoteProtocolError('connection dropped mid-answer'), 'provider_unavailable'),
         ]
         for error, code in cases:
-            provider = ClaudeProvider('sk-test', 'claude-opus-5-5', 30)
-            with mock.patch.object(provider.client.beta.messages, 'stream', side_effect=error):
-                with self.assertRaises(AssistantError) as caught:
-                    list(provider.stream(mock.Mock(system='s', messages=[], schema={})))
+            client = mock.Mock()
+            client.beta.messages.stream.side_effect = error
+            with self.assertRaises(AssistantError) as caught:
+                collect(claude(client).stream(mock.Mock(system='s', messages=[], schema={})))
             self.assertEqual(caught.exception.code, code)
 
     def test_workspace_header_and_setup_errors(self):
         import anthropic
         import httpx2
         provider = ClaudeProvider('sk-test', 'claude-opus-5-5', 30, workspace_id='wrkspc_123')
-        self.assertEqual(provider.client.default_headers.get('anthropic-workspace-id'), 'wrkspc_123')
-        self.assertNotIn('anthropic-workspace-id', ClaudeProvider('sk-test', 'claude-opus-5-5', 30).client.default_headers)
+        self.assertEqual(provider.make_client().default_headers.get('anthropic-workspace-id'), 'wrkspc_123')
+        self.assertNotIn('anthropic-workspace-id',
+                         ClaudeProvider('sk-test', 'claude-opus-5-5', 30).make_client().default_headers)
         request = httpx2.Request('POST', 'https://api.anthropic.com/v1/messages')
         error = anthropic.BadRequestError(
             'This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header',
             response=httpx2.Response(400, request=request), body=None)
-        with mock.patch.object(provider.client.beta.messages, 'stream', side_effect=error):
-            with self.assertRaises(AssistantError) as caught:
-                list(provider.stream(mock.Mock(system='s', messages=[], schema={})))
+        client = mock.Mock()
+        client.beta.messages.stream.side_effect = error
+        with self.assertRaises(AssistantError) as caught:
+            collect(claude(client).stream(mock.Mock(system='s', messages=[], schema={})))
         self.assertEqual((caught.exception.code, caught.exception.retryable), ('provider_auth', False))
 
     def test_claude_request_uses_structured_output_and_streams(self):
-        provider = ClaudeProvider('sk-test', 'claude-opus-5-5', 30)
         text = answer('Hi', [])
         events = [mock.Mock(type='content_block_delta', delta=mock.Mock(type='text_delta', text=text[i:i + 5]))
                   for i in range(0, len(text), 5)]
         final = mock.Mock(stop_reason='end_turn', model='claude-opus-5-5',
                           usage=mock.Mock(input_tokens=10, output_tokens=20))
         stream = mock.MagicMock()
-        stream.__enter__.return_value = stream
-        stream.__iter__.return_value = iter(events)
-        stream.get_final_message.return_value = final
-        with mock.patch.object(provider.client.beta.messages, 'stream', return_value=stream) as call:
-            out = list(provider.stream(mock.Mock(system='SYSTEM', messages=[{'role': 'user', 'content': 'x'}],
-                                                 schema={'type': 'object'})))
-        kwargs = call.call_args.kwargs
+        stream.__aenter__.return_value = stream
+        stream.__aiter__.return_value = events
+        stream.get_final_message = mock.AsyncMock(return_value=final)
+        client = mock.Mock()
+        client.beta.messages.stream.return_value = stream
+        out = collect(claude(client).stream(mock.Mock(system='SYSTEM', messages=[{'role': 'user', 'content': 'x'}],
+                                                      schema={'type': 'object'})))
+        kwargs = client.beta.messages.stream.call_args.kwargs
         self.assertEqual(kwargs['model'], 'claude-opus-5-5')
         self.assertEqual(kwargs['output_config']['format'], {'type': 'json_schema', 'schema': {'type': 'object'}})
         self.assertEqual((kwargs['fallbacks'], kwargs['betas']), ('default', ['server-side-fallback-2026-07-01']))
@@ -276,10 +293,9 @@ class ProviderFailureTests(AssistantTestCase):
         self.assertEqual(out[-1][1].output_tokens, 20)
 
         final.stop_reason = 'refusal'
-        stream.__iter__.return_value = iter([])
-        with mock.patch.object(provider.client.beta.messages, 'stream', return_value=stream):
-            with self.assertRaises(AssistantError) as caught:
-                list(provider.stream(mock.Mock(system='s', messages=[], schema={})))
+        stream.__aiter__.return_value = []
+        with self.assertRaises(AssistantError) as caught:
+            collect(claude(client).stream(mock.Mock(system='s', messages=[], schema={})))
         self.assertEqual(caught.exception.code, 'refused')
 
 
@@ -361,7 +377,7 @@ class ShortErrorMessagesTests(AssistantTestCase):
             self.assertEqual(res.data['error'], 'Server error.')
 
     def test_unexpected_errors_are_json_without_details(self):
-        with mock.patch('assistant.views.run_turn', side_effect=RuntimeError('database password is hunter2')), \
+        with mock.patch('assistant.views.prepare_turn', side_effect=RuntimeError('database password is hunter2')), \
                 self.assertLogs('django.request', 'ERROR'):
             res = self.ask(action='titles')
         self.assertEqual((res.status_code, res.json()), (500, {'error': 'Server error.'}))
@@ -371,3 +387,75 @@ class ShortErrorMessagesTests(AssistantTestCase):
         self.client.force_authenticate(None)
         res = self.client.post('/api/auth/google/', {'credential': 'x'}, format='json')
         self.assertEqual((res.status_code, res.data['error']), (503, 'Server error.'))
+
+
+class CapacityTests(AssistantTestCase):
+    """Under the ASGI server an answer streams on the event loop, so open streams hold no worker or thread."""
+
+    def bearer(self, user):
+        from rest_framework_simplejwt.tokens import RefreshToken
+        return {'Authorization': f'Bearer {RefreshToken.for_user(user).access_token}'}
+
+    async def asgi_ask(self, user, **body):
+        from django.test import AsyncClient
+        response = await AsyncClient().post(URL, {'messages': [], 'formState': FORM, **body},
+                                            content_type='application/json', headers=self.bearer(user))
+        if not response.streaming:
+            return response, None
+        chunks = [chunk async for chunk in response.streaming_content]
+        pairs = []
+        for block in b''.join(chunks).decode().strip().split('\n\n'):
+            lines = dict(line.split(': ', 1) for line in block.split('\n'))
+            pairs.append((lines['event'], json.loads(lines['data'])))
+        return response, pairs
+
+    async def test_asgi_streams_from_an_async_iterator(self):
+        response, events = await self.asgi_ask(self.organizer, action='titles')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_async)  # Served on the event loop, not by a thread
+        self.assertEqual((events[0][0], events[-1][0]), ('meta', 'done'))
+        self.assertIn('delta', [e for e, _ in events])
+
+    async def test_asgi_checks_still_come_first_and_provider_errors_are_events(self):
+        response, _ = await self.asgi_ask(self.organizer, action='chat')
+        self.assertEqual((response.status_code, json.loads(response.content)['code']), (400, 'empty_message'))
+        with self.use(ScriptedProvider(AssistantError('Server error.', 'provider_unavailable'))):
+            response, events = await self.asgi_ask(self.organizer, action='titles')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(events, [('error', {'error': 'Server error.', 'code': 'provider_unavailable',
+                                             'retryable': True})])
+
+    def test_many_answers_stream_at_once_on_one_loop(self):
+        from .services import prepare_turn, start_turn
+        MockProvider.chunk_delay = 0.02
+        turn = prepare_turn([], FORM, 'description')
+
+        async def one():
+            return [event async for event, _ in await start_turn(1, turn)][-1]
+
+        async def run(count):
+            started = time.monotonic()
+            results = await asyncio.gather(*(one() for _ in range(count)))
+            return time.monotonic() - started, results
+
+        single, _ = asyncio.run(run(1))
+        many, results = asyncio.run(run(300))
+        self.assertEqual(set(results), {'done'})
+        # 300 answers at once take about as long as one, not 300 times as long
+        self.assertLess(many, single * 5)
+
+    def test_one_connection_pool_per_event_loop(self):
+        async def clients():
+            first = ClaudeProvider('sk-test', 'claude-opus-5-5', 30)
+            second = ClaudeProvider('sk-test', 'claude-opus-5-5', 30)
+            same = first.client is second.client
+            client = first.client
+            from .providers import close_clients
+            await close_clients()
+            return same, client
+
+        same, client_a = asyncio.run(clients())
+        _, client_b = asyncio.run(clients())
+        self.assertTrue(same)
+        self.assertIsNot(client_a, client_b)
+        self.assertTrue(client_a.is_closed())

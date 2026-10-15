@@ -46,7 +46,9 @@ class AssistantProvider:
     #: True for providers whose suggestions are canned samples, not written by a model
     is_sample = False
 
-    def stream(self, request):
-        """Yields ("text", chunk) as the JSON answer arrives, ("reset", None) when the answer restarts and what
-        came before must be discarded, and finally ("done", Usage). Raises AssistantError on failure."""
+    async def stream(self, request):
+        """An async generator: yields ("text", chunk) as the JSON answer arrives, ("reset", None) when the answer
+        restarts and what came before must be discarded, and finally ("done", Usage). Raises AssistantError on
+        failure. It must not block: thousands of these share one event loop per server process."""
         raise NotImplementedError
+        yield  # pragma: no cover - makes this an async generator

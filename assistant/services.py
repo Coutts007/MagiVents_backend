@@ -61,19 +61,23 @@ def latest_idea(history):
     return ''
 
 
-def run_turn(user, history, raw_form, action='chat'):
-    """A generator of (event, data). The provider is called before the first event, so a provider that refuses
-    the request outright raises AssistantError to the caller instead of starting a stream."""
+def prepare_turn(history, raw_form, action='chat'):
+    """What the provider is sent. Raises AssistantError for a request that cannot be answered (no network)."""
     form = sanitize_form_state(raw_form)
-    request = ProviderRequest(system=SYSTEM_PROMPT, messages=build_messages(history, form, action),
-                              schema=OUTPUT_SCHEMA, action=action, form=form, idea=latest_idea(history))
+    return ProviderRequest(system=SYSTEM_PROMPT, messages=build_messages(history, form, action),
+                           schema=OUTPUT_SCHEMA, action=action, form=form, idea=latest_idea(history))
+
+
+async def start_turn(user_id, request):
+    """Sends the request and returns an async generator of (event, data). The provider is called before the first
+    event, so a provider that refuses the request outright raises AssistantError here instead of in the stream."""
     provider = get_provider()
     events = provider.stream(request)
-    first = next(events, None)  # Sends the request; connection and authentication errors raise here
-    return _turn(user, provider, request, events, first)
+    first = await anext(events, None)  # Sends the request; connection and authentication errors raise here
+    return _turn(user_id, provider, request, events, first)
 
 
-def _turn(user, provider, request, events, first):
+async def _turn(user_id, provider, request, events, first):
     meta = {'provider': provider.name, 'sample': provider.is_sample}
     started = time.monotonic()
     yield 'meta', meta
@@ -85,7 +89,7 @@ def _turn(user, provider, request, events, first):
             yield 'reset', {}
         extractor, raw, usage = ReplyExtractor(), [], None
         pending = [first] if first is not None else []
-        for kind, payload in _chain(pending, events):
+        async for kind, payload in _chain(pending, events):
             if kind == 'text':
                 raw.append(payload)
                 piece = extractor.feed(payload)
@@ -100,24 +104,26 @@ def _turn(user, provider, request, events, first):
         if usage is not None:
             # Token usage only: never the organizer's content
             logger.info('assistant call user=%s provider=%s model=%s action=%s attempt=%s input_tokens=%s '
-                        'output_tokens=%s', user.id, provider.name, usage.model, request.action, attempt + 1,
+                        'output_tokens=%s', user_id, provider.name, usage.model, request.action, attempt + 1,
                         usage.input_tokens, usage.output_tokens)
         if answer is not None:
             break
-        logger.warning('assistant answer could not be parsed (user=%s, attempt %s)', user.id, attempt + 1)
+        logger.warning('assistant answer could not be parsed (user=%s, attempt %s)', user_id, attempt + 1)
     else:
         raise AssistantError(SERVER_ERROR, 'bad_output', 502)
 
     suggestions = validate_suggestions(answer['suggestions'], request.form)
     dropped = len(answer['suggestions']) - len(suggestions)
     if dropped:
-        logger.info('assistant dropped %s invalid suggestion(s) for user=%s', dropped, user.id)
+        logger.info('assistant dropped %s invalid suggestion(s) for user=%s', dropped, user_id)
     yield 'done', {**meta, 'reply': answer['reply'].strip(), 'suggestions': suggestions}
 
 
-def _chain(first_items, rest):
-    yield from first_items
-    yield from rest
+async def _chain(first_items, rest):
+    for item in first_items:
+        yield item
+    async for item in rest:
+        yield item
 
 
 def _parse(text):

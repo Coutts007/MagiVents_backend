@@ -1,4 +1,5 @@
-# MagiVents API image. Production runs Gunicorn; docker-compose.yml (development) overrides the command.
+# MagiVents API image. Production runs the API under Gunicorn (gunicorn_config.py) and the AI assistant from the
+# same image under Gunicorn + Uvicorn workers (gunicorn_assistant.py); docker-compose.yml (development) runs runserver.
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -22,5 +23,4 @@ RUN useradd --create-home --uid 1000 magivents && mkdir -p /app/media && chown -
 USER magivents
 
 EXPOSE 8000
-CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "60", \
-     "--access-logfile", "-"]
+CMD ["gunicorn", "-c", "gunicorn_config.py"]

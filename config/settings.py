@@ -195,6 +195,8 @@ AI_MODEL = os.environ.get('AI_MODEL', '') or 'claude-opus-5-5'
 AI_WORKSPACE_ID = os.environ.get('AI_WORKSPACE_ID', '').strip()
 AI_REQUESTS_PER_HOUR = int(os.environ.get('AI_REQUESTS_PER_HOUR', '60'))
 AI_TIMEOUT_SECONDS = int(os.environ.get('AI_TIMEOUT_SECONDS', '30'))
+# Open connections to the AI provider per server process (one per answer being written); more requests wait
+AI_MAX_CONNECTIONS = int(os.environ.get('AI_MAX_CONNECTIONS', '1000'))
 
 GEOCODER_URL = os.environ.get('GEOCODER_URL', 'https://nominatim.openstreetmap.org/search')
 GEOCODER_USER_AGENT = os.environ.get('GEOCODER_USER_AGENT', 'MagiVents/1.0 (magiventskenya@gmail.com)')
@@ -281,6 +283,7 @@ TEMPLATES = [
     },
 ]
 
+# Production serves the API as WSGI and /api/assistant/ as ASGI (gunicorn_config.py, gunicorn_assistant.py)
 WSGI_APPLICATION = 'config.wsgi.application'
 
 
@@ -301,6 +304,20 @@ if os.environ.get('POSTGRES_HOST'):
             'CONN_HEALTH_CHECKS': True,
         }
     }
+    # A pool of open connections per server process (psycopg 3). Requests borrow one and give it back when
+    # they finish; when all are busy a request waits up to POSTGRES_POOL_TIMEOUT seconds instead of failing.
+    # Keep POSTGRES_POOL_MAX_SIZE x server processes (+ the holds worker) below Postgres' max_connections.
+    try:
+        import psycopg_pool  # noqa: F401
+    except ImportError:
+        psycopg_pool = None  # psycopg2 (an image built before the pool was added): persistent connections
+    if psycopg_pool and os.environ.get('POSTGRES_POOL', 'True').lower() in ('1', 'true', 'yes'):
+        DATABASES['default']['CONN_MAX_AGE'] = 0  # Required with a pool: connections go back to it
+        DATABASES['default']['OPTIONS'] = {'pool': {
+            'min_size': int(os.environ.get('POSTGRES_POOL_MIN_SIZE', '2')),
+            'max_size': int(os.environ.get('POSTGRES_POOL_MAX_SIZE', '10')),
+            'timeout': int(os.environ.get('POSTGRES_POOL_TIMEOUT', '10')),
+        }}
 else:
     DATABASES = {
         'default': {

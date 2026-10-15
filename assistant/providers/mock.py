@@ -3,9 +3,9 @@ Sample suggestions without an AI key, so the assistant can be demoed and tested.
 sample; the suggestions are filled in from what the organizer already typed, and follow the same schema as a
 real model's answer.
 """
+import asyncio
 import json
 import re
-import time
 
 from .base import AssistantProvider, Usage
 
@@ -41,12 +41,12 @@ class MockProvider(AssistantProvider):
     chunk_delay = 0.02
     chunk_size = 24
 
-    def stream(self, request):
+    async def stream(self, request):
         answer = self.answer(request.action, request.form, request.idea)
         text = json.dumps(answer, ensure_ascii=False)
         for start in range(0, len(text), self.chunk_size):
             if self.chunk_delay:
-                time.sleep(self.chunk_delay)
+                await asyncio.sleep(self.chunk_delay)
             yield 'text', text[start:start + self.chunk_size]
         yield 'done', Usage(model='mock')
 
