@@ -1,3 +1,5 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.validators import URLValidator
 from django.db import transaction
 from django.db.models import F, Sum
 from django.utils import timezone
@@ -138,12 +140,26 @@ class GatheringSerializer(serializers.Serializer):
     attendeeCount = serializers.IntegerField(source='attendee_count', read_only=True)
     imageUrl = serializers.CharField(required=False, allow_blank=True)
     host = HostSerializer(required=False)
+    websiteUrl = serializers.CharField(source='website_url', max_length=500, required=False, allow_blank=True)
     agenda = AgendaItemSerializer(many=True, required=False)
     status = serializers.ChoiceField(choices=Gathering.STATUS_CHOICES, required=False)
     isFeatured = serializers.BooleanField(source='is_featured', required=False)
     tags = serializers.ListField(child=serializers.CharField(), required=False)
     curatorNote = serializers.CharField(source='curator_note', required=False, allow_blank=True)
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
+
+    def validate_websiteUrl(self, value):
+        value = value.strip()
+        if not value:
+            return ''
+        # "example.co.ke" is accepted as https://example.co.ke; only web links, never javascript: or similar
+        if '://' not in value:
+            value = f'https://{value}'
+        try:
+            URLValidator(schemes=['http', 'https'])(value)
+        except DjangoValidationError:
+            raise serializers.ValidationError('Enter a valid website address, e.g. https://example.co.ke')
+        return value
 
     def validate(self, attrs):
         is_free = attrs.get('is_free', getattr(self.instance, 'is_free', False))
@@ -261,6 +277,7 @@ class GatheringSerializer(serializers.Serializer):
                 'avatarUrl': obj.host_avatar_url,
                 'bio': obj.host_bio,
             },
+            'websiteUrl': obj.website_url,
             'agenda': [
                 {'time': a.time, 'title': a.title, 'detail': a.detail}
                 for a in obj.agenda_items.all()

@@ -113,6 +113,18 @@ class GatheringApiTests(APITestCase):
         res = self.client.post('/api/gatherings/', event_payload(agenda=agenda), format='json')
         self.assertEqual(res.data['agenda'], agenda)
 
+    def test_organizer_website_link(self):
+        self.client.force_authenticate(self.owner)
+        res = self.client.post('/api/gatherings/', event_payload(websiteUrl=' nairobitech.co.ke/summit '), format='json')
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.data['websiteUrl'], 'https://nairobitech.co.ke/summit')
+        url = f"/api/gatherings/{res.data['id']}/"
+        self.assertEqual(self.client.patch(url, {'websiteUrl': ''}, format='json').data['websiteUrl'], '')
+        for bad in ('javascript:alert(1)', 'ftp://files.example.com', 'not a site'):
+            self.assertEqual(self.client.patch(url, {'websiteUrl': bad}, format='json').status_code, 400, bad)
+        # Events without a website still read back an empty link
+        self.assertEqual(self.client.post('/api/gatherings/', event_payload(), format='json').data['websiteUrl'], '')
+
 
 # Paid bookings confirm within the request when the simulated gateway has no delay (Phase 4)
 @override_settings(PAYMENTS_SIMULATED_DELAY_SECONDS=0)
