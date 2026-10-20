@@ -502,3 +502,40 @@ class TierValidationTests(APITestCase):
         self.assertEqual(self.client.put(f'/api/gatherings/{gid}/', event, format='json').status_code, 400)
         event['pricing']['tiers'][0]['admits'] = 2
         self.assertEqual(self.client.put(f'/api/gatherings/{gid}/', event, format='json').status_code, 200)
+
+
+@override_settings(BOOKING_EMAILS_IN_BACKGROUND=True, PAYMENTS_SIMULATED_DELAY_SECONDS=0)
+class BackgroundEmailTests(APITestCase):
+    """With BOOKING_EMAILS_IN_BACKGROUND the booking request only marks the email; the worker sends it."""
+
+    def setUp(self):
+        call_command('seed_gatherings', verbosity=0)
+        self.event = Gathering.objects.get(id='nairobi-sounds-live')
+        self.tier = self.event.tiers.first()
+
+    def test_booking_marks_the_email_and_the_worker_sends_it_once(self):
+        from tickets.management.commands.send_booking_emails import send_due_emails
+        with self.captureOnCommitCallbacks(execute=True):
+            res = self.client.post('/api/bookings/', {
+                'eventId': self.event.id, 'tierId': str(self.tier.id), 'quantity': 1, 'attendeeName': 'Achieng',
+                'attendeeEmail': 'achieng@x.com', 'paymentMethod': 'card'}, format='json')
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertEqual(res.data['status'], 'confirmed')
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertTrue(Booking.objects.get(id=res.data['id']).confirmation_email_due)
+
+        self.assertEqual(send_due_emails(), 1)
+        self.assertEqual(mail.outbox[0].to, ['achieng@x.com'])
+        self.assertFalse(Booking.objects.get(id=res.data['id']).confirmation_email_due)
+        self.assertEqual(send_due_emails(), 0)
+
+    def test_unreachable_mail_server_keeps_the_email_for_the_next_run(self):
+        from tickets.management.commands.send_booking_emails import send_due_emails
+        booking = Booking.objects.create(gathering=self.event, quantity=1, unit_price=0, total_price=0,
+                                         attendee_name='Otieno', attendee_email='otieno@x.com', status='confirmed',
+                                         ticket_code='MV-123456', confirmation_email_due=True)
+        with mock.patch('django.core.mail.backends.locmem.EmailBackend.open', side_effect=OSError('SMTP down')):
+            self.assertEqual(send_due_emails(), 0)
+        self.assertTrue(Booking.objects.get(id=booking.id).confirmation_email_due)
+        self.assertEqual(send_due_emails(), 1)
+        self.assertEqual(mail.outbox[0].to, ['otieno@x.com'])

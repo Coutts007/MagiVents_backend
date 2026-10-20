@@ -1,5 +1,5 @@
 # Production stack: PostgreSQL, Redis, the API under Gunicorn, the AI assistant under Gunicorn + Uvicorn (ASGI),
-# a worker that releases expired ticket holds, and the frontend (nginx serving the built app and proxying /api to
+# a worker that releases expired ticket holds, a mailer that sends ticket emails, and the frontend (nginx serving the built app and proxying /api to
 # the API, /api/assistant/ to the assistant).
 #
 #   cp .env.example .env.production   # fill in secrets; set DJANGO_DEBUG=False
@@ -32,6 +32,8 @@ services:
     command: ["redis-server", "--save", "", "--appendonly", "no"]
 
   api:
+    # Stateless, so it scales out: `docker compose ... up -d --scale api=3`, then `docker compose ... restart web`
+    # so nginx picks up every instance. Keep instances x processes x POSTGRES_POOL_MAX_SIZE below max_connections.
     build: .
     restart: unless-stopped
     env_file: .env.production
@@ -39,6 +41,8 @@ services:
       POSTGRES_HOST: db
       REDIS_URL: redis://redis:6379/1
       BEHIND_PROXY: "True"
+      # Ticket emails (PDF + SMTP) are sent by the mailer service, not inside the booking request
+      BOOKING_EMAILS_IN_BACKGROUND: "True"
     # Apply migrations, then serve
     command: sh -c "python manage.py migrate --noinput && exec gunicorn -c gunicorn_config.py"
     volumes:
@@ -88,6 +92,20 @@ services:
       POSTGRES_HOST: db
       REDIS_URL: redis://redis:6379/1
     command: sh -c "while true; do python manage.py release_expired_holds; sleep 60; done"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  mailer:
+    # Sends the ticket emails of confirmed bookings, checking every 5 seconds
+    build: .
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      POSTGRES_HOST: db
+      REDIS_URL: redis://redis:6379/1
+      BOOKING_EMAILS_IN_BACKGROUND: "True"
+    command: python manage.py send_booking_emails --loop 5
     depends_on:
       api:
         condition: service_healthy

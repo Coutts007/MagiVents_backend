@@ -43,6 +43,8 @@ class Booking(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='confirmed', db_index=True)
     expires_at = models.DateTimeField(null=True, blank=True)
     confirmed_at = models.DateTimeField(null=True, blank=True)
+    # Set when the ticket email is waiting for the background sender (BOOKING_EMAILS_IN_BACKGROUND)
+    confirmation_email_due = models.BooleanField(default=False)
     # True while the booking's tickets count against tier availability and event capacity
     holds_tickets = models.BooleanField(default=True)
 
@@ -63,6 +65,11 @@ class Booking(models.Model):
 
     class Meta:
         ordering = ['-booking_date']
+        indexes = [
+            # The background sender only looks for the few bookings still waiting for their email
+            models.Index(fields=['confirmation_email_due'], condition=models.Q(confirmation_email_due=True),
+                         name='booking_email_due_idx'),
+        ]
 
     @property
     def is_confirmed(self):

@@ -255,3 +255,67 @@ class SuspendedOrganizerTests(APITestCase):
         # Editing a draft is still allowed
         self.assertEqual(self.client.patch(f'/api/gatherings/{self.draft_id}/', {'title': 'Renamed'},
                                            format='json').status_code, 200)
+
+
+@override_settings(CATALOG_CACHE_SECONDS=10)
+class CatalogCacheTests(APITestCase):
+    """The public list and event pages are shared from the cache; organizers always get fresh, private data."""
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        call_command('seed_gatherings', verbosity=0)
+        self.organizer = User.objects.get(email='curator@magivents.local')
+        self.patron = User.objects.create_user(username='a@x.com', email='a@x.com', password='pw-Patron-123')
+        self.event = Gathering.objects.get(id='nairobi-sounds-live')
+
+    def listed(self):
+        return next(e for e in self.client.get('/api/gatherings/').json() if e['id'] == self.event.id)
+
+    def test_ticket_sales_reuse_the_cached_list_and_edits_replace_it(self):
+        before = self.listed()['attendeeCount']
+        # A sale only moves counters, so visitors keep the cached copy for its short lifetime
+        Gathering.objects.filter(id=self.event.id).update(attendee_count=before + 5)
+        self.event.refresh_from_db()
+        self.event.save(update_fields=['attendee_count', 'status'])
+        self.assertEqual(self.listed()['attendeeCount'], before)
+        # An edit starts a new cache version at once
+        self.event.title = 'Nairobi Sounds Live (moved)'
+        with self.captureOnCommitCallbacks(execute=True):
+            self.event.save()
+        self.assertEqual(self.listed()['title'], 'Nairobi Sounds Live (moved)')
+        self.assertEqual(self.listed()['attendeeCount'], before + 5)
+
+    def test_publishing_and_unpublishing_show_at_once(self):
+        self.listed()
+        self.event.status = 'draft'
+        with self.captureOnCommitCallbacks(execute=True):
+            self.event.save(update_fields=['status'])
+        ids = [e['id'] for e in self.client.get('/api/gatherings/').json()]
+        self.assertNotIn(self.event.id, ids)
+
+    def test_attendees_share_the_public_copy_and_organizers_get_their_own(self):
+        res = self.client.get('/api/gatherings/')
+        self.assertEqual(res['Cache-Control'], 'public, max-age=10')
+        self.client.force_authenticate(self.patron)
+        res = self.client.get(f'/api/gatherings/{self.event.id}/')
+        self.assertIsNone(res.json()['organizerStats'])
+        self.assertNotIn('Cache-Control', res)
+        self.client.force_authenticate(self.organizer)
+        draft = Gathering.objects.filter(organizer=self.organizer).exclude(id=self.event.id).first()
+        Gathering.objects.filter(id=draft.id).update(status='draft')  # no signal: the public copy stays cached
+        listed = {e['id']: e for e in self.client.get('/api/gatherings/').json()}
+        self.assertIn(draft.id, listed)
+        self.assertEqual(listed[self.event.id]['organizerStats'], {'revenue': 0.0, 'ticketsSold': 0})
+
+    def test_gzipped_copy_for_clients_that_accept_it(self):
+        import gzip
+        res = self.client.get('/api/gatherings/', HTTP_ACCEPT_ENCODING='gzip, deflate')
+        self.assertEqual(res['Content-Encoding'], 'gzip')
+        self.assertEqual(json.loads(gzip.decompress(res.content)), self.client.get('/api/gatherings/').json())
+
+    def test_my_gatherings_still_carries_sales_figures(self):
+        self.client.force_authenticate(self.organizer)
+        res = self.client.get('/api/gatherings/my_gatherings/')
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(all(e['organizerStats'] is not None for e in res.data))

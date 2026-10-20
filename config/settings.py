@@ -108,7 +108,8 @@ AUTH_USER_MODEL = 'accounts.User'
 # REST Framework & JWT Configuration
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        # JWT, with the user record cached for AUTH_USER_CACHE_SECONDS (accounts/authentication.py)
+        'accounts.authentication.CachedJWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticatedOrReadOnly',
@@ -126,6 +127,11 @@ REST_FRAMEWORK = {
         'payment_attempts': os.environ.get('PAYMENT_ATTEMPT_RATE', '20/hour'),
         'geocode': os.environ.get('GEOCODE_RATE', '30/hour'),
         'assistant': f"{int(os.environ.get('AI_REQUESTS_PER_HOUR', '60'))}/hour",
+        # Sign-in checks a deliberately slow password hash, so guesses are limited per account and per IP. The IP
+        # limit is generous because many mobile users in Kenya share one carrier IP address.
+        'login_email': os.environ.get('LOGIN_EMAIL_RATE', '10/minute'),
+        'login_ip': os.environ.get('LOGIN_IP_RATE', '120/minute'),
+        'register_ip': os.environ.get('REGISTER_IP_RATE', '60/hour'),
     },
 }
 
@@ -154,6 +160,18 @@ if PAYMENTS_MODE not in ('simulated', 'live'):
     raise ImproperlyConfigured("PAYMENTS_MODE must be 'simulated' or 'live'.")
 # How long a pending booking holds its tickets
 PAYMENT_HOLD_MINUTES = int(os.environ.get('PAYMENT_HOLD_MINUTES', '10'))
+# Event pages give back expired holds at most this often (bookings always do it first)
+HOLDS_SWEEP_SECONDS = int(os.environ.get('HOLDS_SWEEP_SECONDS', '15'))
+
+# Seconds the public event list and event pages are cached and shared between visitors (gatherings/catalog.py).
+# Off by default in development so changes show at once; production uses 10.
+CATALOG_CACHE_SECONDS = int(os.environ.get('CATALOG_CACHE_SECONDS', '0' if DEBUG else '10'))
+# Seconds a signed-in user's record is cached instead of loaded on every request; it is dropped whenever the user
+# is saved. Off by default in development (and tests); production uses 60.
+AUTH_USER_CACHE_SECONDS = int(os.environ.get('AUTH_USER_CACHE_SECONDS', '0' if DEBUG else '60'))
+# True: ticket emails (PDF + SMTP) are sent by `manage.py send_booking_emails --loop 5` instead of inside the
+# booking request. docker-compose.prod.yml runs that worker.
+BOOKING_EMAILS_IN_BACKGROUND = os.environ.get('BOOKING_EMAILS_IN_BACKGROUND', 'False') == 'True'
 # Seconds the simulated gateway takes to "complete" a payment (0 confirms at once)
 PAYMENTS_SIMULATED_DELAY_SECONDS = int(os.environ.get('PAYMENTS_SIMULATED_DELAY_SECONDS', '6'))
 # Public HTTPS address of this API, used to build the callback URLs given to Daraja and Paystack

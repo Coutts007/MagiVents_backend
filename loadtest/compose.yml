@@ -1,0 +1,58 @@
+# Isolated load-test stack (project "magiload"), laid out like docker-compose.prod.yml; nothing shared with dev
+name: magiload
+x-api-env: &api-env
+  DJANGO_DEBUG: "False"
+  DJANGO_SECRET_KEY: loadtest-only-secret-key-0123456789abcdef0123456789abcdef
+  DJANGO_ALLOWED_HOSTS: "*"
+  SECURE_SSL_REDIRECT: "False"
+  BEHIND_PROXY: "True"
+  POSTGRES_HOST: db
+  POSTGRES_DB: magi
+  POSTGRES_USER: magi
+  POSTGRES_PASSWORD: magi
+  REDIS_URL: redis://redis:6379/1
+  PAYMENTS_SIMULATED_DELAY_SECONDS: "6"
+  BOOKING_EMAILS_IN_BACKGROUND: "${BG_EMAIL:-True}"
+  CATALOG_CACHE_SECONDS: "${CATALOG_CACHE_SECONDS:-10}"
+  EMAIL_BACKEND: django.core.mail.backends.locmem.EmailBackend
+services:
+  db:
+    image: postgres:15-alpine
+    command: ["postgres", "-c", "max_connections=300"]
+    cpuset: "5"
+    environment: {POSTGRES_DB: magi, POSTGRES_USER: magi, POSTGRES_PASSWORD: magi}
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -U magi -d magi"], interval: 2s, retries: 20}
+  redis:
+    image: redis:7-alpine
+    cpuset: "5"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+  api:
+    build: ..
+    image: magiload-api:latest
+    cpuset: "0,1,2,3"
+    mem_limit: 4g
+    environment:
+      <<: *api-env
+      WEB_CONCURRENCY: "${WEB_CONCURRENCY:-5}"
+      GUNICORN_THREADS: "${GUNICORN_THREADS:-4}"
+    command: sh -c "python manage.py migrate --noinput >/dev/null && python manage.py seed_gatherings && exec gunicorn -c gunicorn_config.py --access-logfile /dev/null"
+    depends_on: {db: {condition: service_healthy}, redis: {condition: service_started}}
+    healthcheck: {test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/')"], interval: 3s, retries: 40}
+  mailer:
+    image: magiload-api:latest
+    cpuset: "4"
+    environment: *api-env
+    command: python manage.py send_booking_emails --loop 5
+    depends_on: {api: {condition: service_healthy}}
+  web:
+    image: nginx:1.27-alpine
+    cpuset: "4"
+    ulimits: {nofile: 65535}
+    ports: ["8100:80"]
+    extra_hosts: ["assistant:127.0.0.1"]
+    volumes:
+      - ../../magivents_interface/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx-main.conf:/etc/nginx/nginx.conf:ro
+      - ./html:/usr/share/nginx/html:ro
+    depends_on: {api: {condition: service_healthy}}

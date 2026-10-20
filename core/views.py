@@ -15,7 +15,7 @@ class PublicConfigView(APIView):
     def get(self, request):
         from listings.services import online_payments_available
         from payments.providers import available_methods
-        return Response({
+        response = Response({
             'mpesaPaybill': settings.MPESA_C2B_SHORTCODE or settings.MPESA_PAYBILL_NUMBER,
             'mpesaAccountName': settings.MPESA_ACCOUNT_NAME,
             'paymentsMode': settings.PAYMENTS_MODE,
@@ -24,6 +24,9 @@ class PublicConfigView(APIView):
             # False in live mode: listing fees are paid by hand and confirmed by an admin
             'listingFeeOnline': online_payments_available(),
         })
+        # The same for everyone and loaded on every visit: let nginx and browsers reuse it for a minute
+        response['Cache-Control'] = 'public, max-age=60'
+        return response
 
 
 @extend_schema(responses=OpenApiTypes.OBJECT)

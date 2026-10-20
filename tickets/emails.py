@@ -10,8 +10,9 @@ from .documents import admits_label, build_ticket_pdf, payment_line, ticket_url
 logger = logging.getLogger(__name__)
 
 
-def send_booking_confirmation(booking):
-    """Sends the ticket to the attendee. Returns False instead of raising, so email never breaks a booking."""
+def send_booking_confirmation(booking, connection=None):
+    """Sends the ticket to the attendee. Returns False instead of raising, so email never breaks a booking.
+    `connection` lets a batch of emails share one connection to the mail server."""
     try:
         g = booking.gathering
         context = {
@@ -29,6 +30,7 @@ def send_booking_confirmation(booking):
             from_email=settings.DEFAULT_FROM_EMAIL,
             to=[booking.attendee_email],
             reply_to=[settings.MAGIVENTS_CONTACT_EMAIL],
+            connection=connection,
         )
         message.attach_alternative(render_to_string('tickets/emails/booking_confirmed.html', context), 'text/html')
         message.attach(f'MagiVents-Ticket-{booking.ticket_code}.pdf', build_ticket_pdf(booking), 'application/pdf')

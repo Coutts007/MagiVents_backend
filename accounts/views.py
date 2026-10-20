@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import User
+from .throttles import LOGIN_THROTTLES, RegisterIPThrottle
 from .serializers import (
     GoogleAuthSerializer,
     LoginSerializer,
@@ -39,6 +40,7 @@ def auth_response(request, user, status_code=status.HTTP_200_OK):
 class RegisterView(APIView):
     serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [RegisterIPThrottle]
 
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
@@ -50,6 +52,7 @@ class RegisterView(APIView):
 class LoginView(APIView):
     serializer_class = LoginSerializer
     permission_classes = [permissions.AllowAny]
+    throttle_classes = LOGIN_THROTTLES
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)

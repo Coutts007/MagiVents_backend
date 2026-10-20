@@ -1,16 +1,20 @@
 """Server-generated ticket documents: the PDF ticket and the URL its QR code points to."""
 import io
+import itertools
 from pathlib import Path
 
 from django.conf import settings
-from reportlab.graphics import renderPDF
-from reportlab.graphics.barcode.qr import QrCodeWidget
-from reportlab.graphics.shapes import Drawing
+from reportlab import rl_config
+from reportlab.graphics.barcode import qrencoder
 from reportlab.lib.colors import HexColor
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader, simpleSplit
 from reportlab.pdfgen import canvas
+
+# Store PDF streams as compressed binary instead of ASCII85 text: smaller files, and reportlab's pure-Python ASCII85
+# encoder was a fifth of the time it took to make a ticket
+rl_config.useA85 = 0
 
 LOGO = Path(settings.BASE_DIR) / 'core' / 'assets' / 'magivents-logo-tile.png'
 
@@ -51,12 +55,25 @@ def payment_line(booking):
     return f'{format_kes(booking.total_price)} paid via {method}{reference}'
 
 
-def _qr_drawing(data, size):
-    widget = QrCodeWidget(data, barLevel='M')
-    x1, y1, x2, y2 = widget.getBounds()
-    drawing = Drawing(size, size, transform=[size / (x2 - x1), 0, 0, size / (y2 - y1), 0, 0])
-    drawing.add(widget)
-    return drawing
+def _draw_qr(pdf, data, x, y, size, border=4):
+    """Draws a QR code (level M, 4-module quiet zone) straight onto the page, one rectangle per run of dark
+    modules. reportlab's QrCodeWidget encodes twice and builds a checked shape per run, which was most of the
+    time it took to make a ticket."""
+    qr = qrencoder.QRCode(None, qrencoder.QRErrorCorrectLevel.M)
+    qr.addData(data)
+    qr.make()
+    count = qr.getModuleCount()
+    box = size / (count + 2 * border)
+    pdf.saveState()
+    pdf.setFillColor(HexColor('#000000'))
+    for r, row in enumerate(qr.modules):
+        c = 0
+        for dark, run in itertools.groupby(map(bool, row)):
+            n = len(list(run))
+            if dark:
+                pdf.rect(x + (c + border) * box, y + size - (r + border + 1) * box, n * box, box, stroke=0, fill=1)
+            c += n
+    pdf.restoreState()
 
 
 def build_ticket_pdf(booking):
@@ -137,7 +154,7 @@ def build_ticket_pdf(booking):
     pdf.setFillColor(HexColor('#FFFFFF'))
     pdf.setStrokeColor(BORDER)
     pdf.roundRect(qr_x - 3 * mm, qr_y - 3 * mm, qr_size + 6 * mm, qr_size + 6 * mm, 3 * mm, stroke=1, fill=1)
-    renderPDF.draw(_qr_drawing(ticket_url(booking), qr_size), pdf, qr_x, qr_y)
+    _draw_qr(pdf, ticket_url(booking), qr_x, qr_y, qr_size)
     pdf.setFillColor(MOCHA)
     pdf.setFont('Helvetica', 8)
     pdf.drawCentredString(qr_x + qr_size / 2, qr_y - 9 * mm, 'Scan at the entrance')

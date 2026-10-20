@@ -120,6 +120,15 @@ def release_expired_holds(gathering_id=None):
     return released
 
 
+def release_expired_holds_soon(gathering_id=None):
+    """release_expired_holds() for pages that only show availability: at most once per HOLDS_SWEEP_SECONDS
+    (per event, or for all events), instead of a query on every page view. Bookings always sweep first."""
+    from django.core.cache import cache
+    if cache.add(f'holds-sweep:{gathering_id or "*"}', 1, settings.HOLDS_SWEEP_SECONDS):
+        return release_expired_holds(gathering_id)
+    return 0
+
+
 # --- Confirmation --------------------------------------------------------------------------------
 
 def confirm_free_booking(booking):
@@ -128,7 +137,7 @@ def confirm_free_booking(booking):
     booking.confirmed_at = timezone.now()
     booking.ticket_code = generate_ticket_code()
     booking.save(update_fields=['status', 'confirmed_at', 'ticket_code'])
-    transaction.on_commit(lambda: send_booking_confirmation(booking))
+    queue_confirmation_email(booking)
 
 
 def _confirm(booking, payment):
@@ -141,7 +150,16 @@ def _confirm(booking, payment):
         booking.mpesa_phone_number = payment.phone_number or booking.mpesa_phone_number
     booking.save(update_fields=['status', 'confirmed_at', 'expires_at', 'ticket_code',
                                 'mpesa_receipt_number', 'mpesa_phone_number'])
-    transaction.on_commit(lambda: send_booking_confirmation(booking))
+    queue_confirmation_email(booking)
+
+
+def queue_confirmation_email(booking):
+    """Sends the ticket email after the booking commits. With BOOKING_EMAILS_IN_BACKGROUND the booking is only
+    marked, and `manage.py send_booking_emails` builds the PDF and talks to the mail server outside any request."""
+    if settings.BOOKING_EMAILS_IN_BACKGROUND:
+        Booking.objects.filter(id=booking.id).update(confirmation_email_due=True)
+    else:
+        transaction.on_commit(lambda: send_booking_confirmation(booking))
 
 
 def _is_listing_fee(payment_id):

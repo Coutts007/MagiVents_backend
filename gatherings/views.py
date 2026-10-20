@@ -10,10 +10,11 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
-from payments.services import release_expired_holds
+from payments.services import release_expired_holds_soon
 from tickets.models import Booking
 from tickets.serializers import CheckInSerializer, attendee_row, normalize_ticket_code
 
+from . import catalog
 from .models import Gathering
 from .publishing import OrganizerSuspended, suspended_message
 from .serializers import GatheringSerializer
@@ -58,7 +59,19 @@ class GatheringViewSet(viewsets.ModelViewSet):
     search_fields = ['title', 'subtitle', 'category', 'venue_name', 'venue_city', 'host_name', 'tags']
 
     def get_queryset(self):
-        qs = Gathering.objects.select_related('listing_fee').prefetch_related('tiers', 'agenda_items').order_by('iso_date').annotate(
+        # Sales totals are not computed here: they are shown only to an event's organizer, and summing every booking
+        # for every visitor made the list slower with each ticket sold. See with_sales() and my_gatherings.
+        qs = Gathering.objects.select_related('listing_fee').prefetch_related('tiers', 'agenda_items').order_by('iso_date')
+        # Drafts are only visible to their organizer
+        visible = ~Q(status='draft')
+        if self.request.user.is_authenticated:
+            visible |= Q(organizer=self.request.user)
+        return qs.filter(visible)
+
+    @staticmethod
+    def with_sales(qs):
+        """Adds the organizer's sales figures; without them the serializer works them out per event."""
+        return qs.annotate(
             # Sales count confirmed bookings only, not tickets held by unpaid ones
             revenue_total=Sum('bookings__total_price', filter=Q(bookings__status='confirmed')),
             tickets_sold=Sum('bookings__quantity', filter=Q(bookings__status='confirmed')),
@@ -66,20 +79,19 @@ class GatheringViewSet(viewsets.ModelViewSet):
             people_confirmed=Sum(F('bookings__quantity') * F('bookings__admits_per_ticket'),
                                  filter=Q(bookings__status='confirmed')),
         )
-        # Drafts are only visible to their organizer
-        visible = ~Q(status='draft')
-        if self.request.user.is_authenticated:
-            visible |= Q(organizer=self.request.user)
-        return qs.filter(visible)
 
     def list(self, request, *args, **kwargs):
-        # Availability is about to be read: give back tickets held by expired bookings first
-        release_expired_holds()
-        return super().list(request, *args, **kwargs)
+        def build():
+            # Availability is about to be read: give back tickets held by expired bookings first
+            release_expired_holds_soon()
+            return super(GatheringViewSet, self).list(request, *args, **kwargs)
+        return catalog.cached_response(request, build)
 
     def retrieve(self, request, *args, **kwargs):
-        release_expired_holds(kwargs.get('pk'))
-        return super().retrieve(request, *args, **kwargs)
+        def build():
+            release_expired_holds_soon(kwargs.get('pk'))
+            return super(GatheringViewSet, self).retrieve(request, *args, **kwargs)
+        return catalog.cached_response(request, build)
 
     def perform_create(self, serializer):
         gathering = serializer.save(organizer=self.request.user)
@@ -108,7 +120,7 @@ class GatheringViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def my_gatherings(self, request):
         """Returns gatherings organized by the current user."""
-        gatherings = self.get_queryset().filter(organizer=request.user)
+        gatherings = self.with_sales(self.get_queryset().filter(organizer=request.user))
         serializer = self.get_serializer(gatherings, many=True)
         return Response(serializer.data)
 

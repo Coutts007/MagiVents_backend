@@ -145,3 +145,58 @@ class RoleTests(APITestCase):
         self.client.force_authenticate(user)
         res = self.client.get('/api/auth/profile/')
         self.assertEqual((res.data['isSuspended'], res.data['suspensionReason']), (True, 'Unpaid venue'))
+
+
+class SignInThrottleTests(APITestCase):
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        User.objects.create_user(username='t@x.com', email='t@x.com', password='pw-Right-123')
+
+    @override_settings(REST_FRAMEWORK={**__import__('django.conf').conf.settings.REST_FRAMEWORK,
+                                       'DEFAULT_THROTTLE_RATES': {'login_email': '3/minute', 'login_ip': '100/minute',
+                                                                  'register_ip': '100/hour'}})
+    def test_guessing_one_account_is_limited(self):
+        from rest_framework.settings import api_settings
+        from rest_framework.throttling import SimpleRateThrottle
+        with mock.patch.object(SimpleRateThrottle, 'THROTTLE_RATES', api_settings.DEFAULT_THROTTLE_RATES):
+            for _ in range(3):
+                res = self.client.post('/api/auth/login/', {'email': 't@x.com', 'password': 'wrong'}, format='json')
+                self.assertEqual(res.status_code, 401)
+            res = self.client.post('/api/auth/login/', {'email': 'T@x.com ', 'password': 'pw-Right-123'}, format='json')
+            self.assertEqual(res.status_code, 429)
+            # Other accounts are unaffected
+            res = self.client.post('/api/auth/login/', {'email': 'other@x.com', 'password': 'x'}, format='json')
+            self.assertEqual(res.status_code, 401)
+            res = self.client.post('/api/auth/token/', {'email': 't@x.com', 'password': 'pw-Right-123'}, format='json')
+            self.assertEqual(res.status_code, 429)
+
+
+@override_settings(AUTH_USER_CACHE_SECONDS=60)
+class CachedSignInTests(APITestCase):
+    """Signed-in requests use a cached copy of the user, which is dropped as soon as the user changes."""
+
+    def setUp(self):
+        from django.core.cache import cache
+        from rest_framework_simplejwt.tokens import RefreshToken
+        cache.clear()
+        self.user = User.objects.create_user(username='c@x.com', email='c@x.com', password='pw-Cache-123')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {RefreshToken.for_user(self.user).access_token}')
+
+    def test_changes_to_the_user_apply_to_the_next_request(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        self.assertEqual(self.client.get('/api/auth/profile/').status_code, 200)
+        with CaptureQueriesContext(connection) as queries:
+            self.assertEqual(self.client.get('/api/auth/profile/').status_code, 200)
+        self.assertEqual(len(queries), 0)  # served from the cached copy
+
+        self.user.first_name = 'Changed'
+        with self.captureOnCommitCallbacks(execute=True):
+            self.user.save()
+        self.assertEqual(self.client.get('/api/auth/profile/').data['name'], 'Changed')
+
+        self.user.is_active = False
+        with self.captureOnCommitCallbacks(execute=True):
+            self.user.save()
+        self.assertEqual(self.client.get('/api/auth/profile/').status_code, 401)
