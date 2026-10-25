@@ -308,6 +308,19 @@ class DarajaStkTests(LifecycleBase):
         self.assertEqual(ok.status_code, 200)
         self.assertEqual(Booking.objects.get(id=res.data['id']).status, 'confirmed')
 
+    def test_answered_prompt_shows_within_seconds_without_a_callback(self):
+        res, _, _ = self.start()
+        cancelled = {'ResponseCode': '0', 'ResultCode': '1032', 'ResultDesc': 'Request cancelled by user',
+                     'CheckoutRequestID': 'ws_CO_123'}
+        payments = Payment.objects.filter(booking_id=res.data['id'])
+        payments.update(last_queried_at=None, created_at=timezone.now() - timedelta(seconds=2))
+        with mock.patch('payments.providers.daraja.requests.post', return_value=fake_response(cancelled)) as post:
+            self.assertEqual(self.status(res.data['id']).data['status'], 'pending')
+        post.assert_not_called()  # too soon for anyone to have answered
+        payments.update(created_at=timezone.now() - timedelta(seconds=6))
+        with mock.patch('payments.providers.daraja.requests.post', return_value=fake_response(cancelled)):
+            self.assertEqual(self.status(res.data['id']).data['status'], 'failed')
+
     def test_query_fallback_when_callback_never_arrives(self):
         res, _, _ = self.start()
         Payment.objects.filter(booking_id=res.data['id']).update(

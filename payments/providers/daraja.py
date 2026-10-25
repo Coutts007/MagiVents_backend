@@ -104,9 +104,10 @@ class DarajaStkProvider(PaymentProvider):
     """Lipa na M-Pesa Online: a payment prompt on the attendee's phone."""
     name = 'mpesa_stk'
     method = 'mpesa'
-    query_interval = 15
-    # Give the attendee time to enter the PIN; the callback usually arrives first
-    min_query_age = 25
+    # The callback usually arrives first; when it cannot (slow, or no public URL) the attendee should still see
+    # the result within seconds of answering the prompt. Unanswered prompts just report "still processing".
+    query_interval = 4
+    min_query_age = 5
     not_configured_message = 'M-Pesa prompts are not set up yet. Please pay by Paybill or card.'
 
     def is_configured(self):
