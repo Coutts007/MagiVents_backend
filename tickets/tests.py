@@ -573,6 +573,19 @@ class FreeEventLimitTests(APITestCase):
         self.assertEqual(self.register('other@x.com').status_code, 201)
         self.assertEqual(self.event.bookings.filter(status='confirmed').count(), 2)
 
+    def test_guest_gets_the_ticket_email_at_the_address_they_gave(self):
+        # No account and not signed in: the email goes to the attendee email from the form
+        with self.captureOnCommitCallbacks(execute=True):
+            res = self.register('wanjiru.guest@x.com')
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertIsNone(Booking.objects.get(id=res.data['id']).user)
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, ['wanjiru.guest@x.com'])
+        self.assertIn(self.event.title, message.subject)
+        self.assertIn('confirmed', message.body)
+        self.assertEqual(message.attachments[0][0], f"MagiVents-Ticket-{res.data['ticketCode']}.pdf")
+
     def test_signed_in_user_registers_once_whatever_the_email(self):
         user = User.objects.create_user(username='u@x.com', email='u@x.com', password='pw-User-123')
         self.client.force_authenticate(user)
