@@ -1,6 +1,7 @@
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -97,6 +98,17 @@ class BookingSerializer(serializers.ModelSerializer):
 
         if gathering.status != 'published':
             raise serializers.ValidationError('This gathering is not open for reservations.')
+
+        if gathering.is_free:
+            # One registration per person: checked under the gathering lock, so two quick submits cannot both pass
+            if quantity != 1:
+                raise serializers.ValidationError({'quantity': 'Free events allow one ticket per person.'})
+            user = self.context['request'].user
+            person = Q(attendee_email__iexact=validated_data['attendee_email'])
+            if user.is_authenticated:
+                person |= Q(user=user)
+            if gathering.bookings.filter(person, status='confirmed').exists():
+                raise serializers.ValidationError('You are already registered for this event.')
 
         tier = None
         tiers = TicketTier.objects.select_for_update().filter(gathering=gathering)

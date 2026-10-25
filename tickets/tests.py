@@ -539,3 +539,51 @@ class BackgroundEmailTests(APITestCase):
         self.assertTrue(Booking.objects.get(id=booking.id).confirmation_email_due)
         self.assertEqual(send_due_emails(), 1)
         self.assertEqual(mail.outbox[0].to, ['otieno@x.com'])
+
+
+class FreeEventLimitTests(APITestCase):
+    """Free events: one ticket per booking and one registration per person."""
+
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        call_command('seed_gatherings', verbosity=0)
+        self.event = Gathering.objects.get(id='nairobi-sounds-live')
+        self.event.is_free = True
+        self.event.save(update_fields=['is_free'])
+        self.event.tiers.update(price=0, sale_price=None)
+        self.tier = self.event.tiers.first()
+
+    def register(self, email='guest@x.com', quantity=1):
+        return self.client.post('/api/bookings/', {
+            'eventId': self.event.id, 'tierId': str(self.tier.id), 'quantity': quantity,
+            'attendeeName': 'Guest', 'attendeeEmail': email}, format='json')
+
+    def test_only_one_ticket_per_registration(self):
+        res = self.register(quantity=2)
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('quantity', res.data)
+        self.assertEqual(self.register().status_code, 201)
+
+    def test_guest_email_registers_once(self):
+        self.assertEqual(self.register('guest@x.com').status_code, 201)
+        again = self.register('GUEST@x.com')
+        self.assertEqual(again.status_code, 400)
+        self.assertIn('already registered', str(again.data))
+        self.assertEqual(self.register('other@x.com').status_code, 201)
+        self.assertEqual(self.event.bookings.filter(status='confirmed').count(), 2)
+
+    def test_signed_in_user_registers_once_whatever_the_email(self):
+        user = User.objects.create_user(username='u@x.com', email='u@x.com', password='pw-User-123')
+        self.client.force_authenticate(user)
+        self.assertEqual(self.register('u@x.com').status_code, 201)
+        self.assertEqual(self.register('another@x.com').status_code, 400)
+
+    def test_paid_events_still_allow_several_tickets(self):
+        self.event.is_free = False
+        self.event.save(update_fields=['is_free'])
+        self.event.tiers.update(price=500)
+        res = self.client.post('/api/bookings/', {
+            'eventId': self.event.id, 'tierId': str(self.tier.id), 'quantity': 3, 'attendeeName': 'Guest',
+            'attendeeEmail': 'guest@x.com', 'paymentMethod': 'card'}, format='json')
+        self.assertEqual(res.status_code, 201, res.data)
