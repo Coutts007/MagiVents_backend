@@ -1,7 +1,7 @@
 import re
 
 from django.db import transaction
-from django.db.models import F, Q, Sum
+from django.db.models import F, Prefetch, Q, Sum
 from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
@@ -15,7 +15,7 @@ from tickets.models import Booking
 from tickets.serializers import CheckInSerializer, attendee_row, normalize_ticket_code
 
 from . import catalog
-from .models import Gathering
+from .models import Gathering, tiers_with_tickets_held
 from .publishing import OrganizerSuspended, suspended_message
 from .serializers import GatheringSerializer
 
@@ -61,7 +61,7 @@ class GatheringViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         # Sales totals are not computed here: they are shown only to an event's organizer, and summing every booking
         # for every visitor made the list slower with each ticket sold. See with_sales() and my_gatherings.
-        qs = Gathering.objects.select_related('listing_fee').prefetch_related('tiers', 'agenda_items').order_by('iso_date')
+        qs = Gathering.objects.select_related('listing_fee').prefetch_related(Prefetch('tiers', queryset=tiers_with_tickets_held()), 'agenda_items').order_by('iso_date')
         # Drafts are only visible to their organizer
         visible = ~Q(status='draft')
         if self.request.user.is_authenticated:

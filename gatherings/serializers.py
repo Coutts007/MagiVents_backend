@@ -14,8 +14,8 @@ class TicketTierSerializer(serializers.ModelSerializer):
     id = serializers.CharField(required=False, allow_blank=True)
     price = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0)
     perks = serializers.ListField(child=serializers.CharField(allow_blank=True), required=False)
-    # Total tickets of this type. Older clients send only `available` (tickets left), which still works.
-    quantity = serializers.IntegerField(min_value=0, required=False)
+    # Total tickets of this type, or null for no limit. Older clients send only `available` (tickets left).
+    quantity = serializers.IntegerField(min_value=0, required=False, allow_null=True)
     # People one ticket admits: 1 by default, 2 for a couple, the group size for a group ticket
     admits = serializers.IntegerField(min_value=1, max_value=TicketTier.MAX_ADMITS, required=False)
     # Flash sale (times are ISO 8601; stored in UTC)
@@ -32,7 +32,8 @@ class TicketTierSerializer(serializers.ModelSerializer):
         model = TicketTier
         fields = ['id', 'name', 'price', 'description', 'quantity', 'available', 'perks', 'admits',
                   'salePrice', 'saleStartsAt', 'saleEndsAt', 'saleQuantity', 'onSaleFrom', 'onSaleUntil']
-        extra_kwargs = {'description': {'required': False, 'allow_blank': True}, 'available': {'required': False}}
+        extra_kwargs = {'description': {'required': False, 'allow_blank': True},
+                        'available': {'required': False, 'allow_null': True}}
 
     def validate(self, attrs):
         name = attrs.get('name') or 'This ticket type'
@@ -136,7 +137,8 @@ class GatheringSerializer(serializers.Serializer):
     venue = VenueSerializer()
     isFree = serializers.BooleanField(source='is_free', required=False)
     pricing = PricingSerializer()
-    capacity = serializers.IntegerField(min_value=1)
+    # Null (or left out) for no limit
+    capacity = serializers.IntegerField(min_value=1, required=False, allow_null=True)
     attendeeCount = serializers.IntegerField(source='attendee_count', read_only=True)
     imageUrl = serializers.CharField(required=False, allow_blank=True)
     host = HostSerializer(required=False)
@@ -194,9 +196,10 @@ class GatheringSerializer(serializers.Serializer):
                 # The cheapest ticket is the price shown on the event
                 attrs['pricing']['startingPrice'] = min(t['price'] for t in tiers)
             if all('quantity' in t for t in tiers):
-                # Capacity is the number of people every ticket type admits in total
+                # Capacity is the number of people every ticket type admits in total; one ticket type without a
+                # limit means the event has none either
                 existing = {str(t.id): t for t in self.instance.tiers.all()} if self.instance is not None else {}
-                attrs['capacity'] = sum(
+                attrs['capacity'] = None if any(t['quantity'] is None for t in tiers) else sum(
                     t['quantity'] * t.get('admits', getattr(existing.get(str(t.get('id', ''))), 'admits', 1))
                     for t in tiers
                 )
@@ -355,6 +358,7 @@ class GatheringSerializer(serializers.Serializer):
         keep = set()
         for order, tier_data in enumerate(tiers):
             tier_id = str(tier_data.pop('id', '') or '')
+            unlimited = 'quantity' in tier_data and tier_data['quantity'] is None
             quantity = tier_data.pop('quantity', None)
             available = tier_data.pop('available', None)
             tier = existing.get(tier_id) or TicketTier(gathering=instance, quantity=0, available=0)
@@ -366,7 +370,9 @@ class GatheringSerializer(serializers.Serializer):
                     {'pricing': f'"{tier.name}" already has tickets sold, so the people each ticket admits '
                                 f'cannot change.'}
                 )
-            if quantity is not None:
+            if unlimited:
+                tier.quantity = tier.available = None
+            elif quantity is not None:
                 if quantity < sold:
                     raise serializers.ValidationError(
                         {'pricing': f'"{tier_data.get("name", tier.name)}" already has {sold} tickets sold; '

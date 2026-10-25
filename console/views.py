@@ -246,7 +246,7 @@ class EventStatusView(ConsoleView):
             if gathering is None:
                 raise NotFound()
             new_status = data.validated_data['status']
-            if new_status == 'published' and gathering.attendee_count >= gathering.capacity:
+            if new_status == 'published' and gathering.is_full:
                 new_status = 'sold_out'
             if gathering.status != new_status:
                 gathering.status = new_status

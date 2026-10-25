@@ -600,3 +600,83 @@ class FreeEventLimitTests(APITestCase):
             'eventId': self.event.id, 'tierId': str(self.tier.id), 'quantity': 3, 'attendeeName': 'Guest',
             'attendeeEmail': 'guest@x.com', 'paymentMethod': 'card'}, format='json')
         self.assertEqual(res.status_code, 201, res.data)
+
+
+from payments.services import release_expired_holds
+
+
+@override_settings(PAYMENTS_SIMULATED_DELAY_SECONDS=0)
+class NoLimitTests(APITestCase):
+    """Ticket types and ticket numbers are optional: an event or a ticket type without a number has no limit."""
+
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        self.organizer = User.objects.create_user(username='o@x.com', email='o@x.com', password='pw-Org-12345',
+                                                  role='curator')
+
+    def create(self, tiers, **overrides):
+        self.client.force_authenticate(self.organizer)
+        payload = event_payload(isFree=False, status='draft', **overrides)
+        payload.pop('capacity', None)
+        payload['pricing'] = {'currency': 'KES', 'startingPrice': 500, 'tiers': tiers}
+        res = self.client.post('/api/gatherings/', payload, format='json')
+        self.assertEqual(res.status_code, 201, res.data)
+        Gathering.objects.filter(id=res.data['id']).update(status='published')
+        self.client.force_authenticate(None)
+        return res.data
+
+    def book(self, event_id, quantity, tier_id=''):
+        return self.client.post('/api/bookings/', {
+            'eventId': event_id, 'tierId': tier_id, 'quantity': quantity, 'attendeeName': 'Guest',
+            'attendeeEmail': 'guest@x.com', 'paymentMethod': 'mpesa', 'mpesaPhoneNumber': '0712345678',
+            'totalInKes': 1}, format='json')
+
+    def test_event_without_ticket_types_or_capacity(self):
+        event = self.create([])
+        self.assertIsNone(event['capacity'])
+        self.assertEqual(event['pricing']['tiers'], [])
+        for _ in range(3):
+            res = self.book(event['id'], 20)
+            self.assertEqual(res.status_code, 201, res.data)
+        self.assertEqual(res.data['tierName'], 'General Admission')
+        gathering = Gathering.objects.get(id=event['id'])
+        self.assertEqual((gathering.attendee_count, gathering.status), (60, 'published'))
+
+    def test_ticket_type_without_quantity(self):
+        event = self.create([{'name': 'Regular', 'price': 500, 'quantity': None},
+                             {'name': 'VIP', 'price': 2000, 'quantity': 5}])
+        self.assertIsNone(event['capacity'])
+        regular = event['pricing']['tiers'][0]
+        self.assertEqual((regular['quantity'], regular['available']), (None, None))
+        self.assertEqual(self.book(event['id'], 20, regular['id']).status_code, 201)
+
+        listed = next(e for e in self.client.get('/api/gatherings/').data if e['id'] == event['id'])
+        self.assertEqual(listed['pricing']['tiers'][0]['sold'], 20)
+        self.assertIsNone(listed['pricing']['tiers'][0]['available'])
+
+        # Releasing a hold on a ticket type without a limit leaves it without one
+        booking = Booking.objects.get(gathering_id=event['id'])
+        Booking.objects.filter(id=booking.id).update(status='pending', expires_at=timezone.now() - timedelta(minutes=1))
+        release_expired_holds()
+        tier = TicketTier.objects.get(id=regular['id'])
+        self.assertEqual((tier.quantity, tier.available, tier.sold), (None, None, 0))
+        self.assertEqual(Gathering.objects.get(id=event['id']).attendee_count, 0)
+
+    def test_limit_added_later_counts_tickets_already_sold(self):
+        event = self.create([{'name': 'Regular', 'price': 500, 'quantity': None}])
+        regular = event['pricing']['tiers'][0]
+        self.assertEqual(self.book(event['id'], 10, regular['id']).status_code, 201)
+        self.client.force_authenticate(self.organizer)
+        url = f"/api/gatherings/{event['id']}/"
+        pricing = lambda quantity: {'pricing': {'currency': 'KES', 'startingPrice': 500, 'tiers': [  # noqa: E731
+            {'id': regular['id'], 'name': 'Regular', 'price': 500, 'quantity': quantity}]}}
+        res = self.client.patch(url, pricing(5), format='json')
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('10 places are already booked', str(res.data))
+        res = self.client.patch(url, pricing(30), format='json')
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual((res.data['capacity'], res.data['pricing']['tiers'][0]['available']), (30, 20))
+        # And taken away again
+        res = self.client.patch(url, pricing(None), format='json')
+        self.assertEqual((res.data['capacity'], res.data['pricing']['tiers'][0]['available']), (None, None))

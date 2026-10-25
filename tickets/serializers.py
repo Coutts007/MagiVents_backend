@@ -124,9 +124,8 @@ class BookingSerializer(serializers.ModelSerializer):
         now = timezone.now()
         admits, is_sale = (tier.admits if tier is not None else 1), False
         people = quantity * admits
-        remaining = gathering.capacity - gathering.attendee_count
-        if people > remaining:
-            raise serializers.ValidationError(f'Only {max(remaining, 0)} places remain for this gathering.')
+        if not gathering.has_room_for(people):
+            raise serializers.ValidationError(f'Only {gathering.places_left} places remain for this gathering.')
 
         if tier is not None:
             state = tier.sales_state(now)
@@ -134,7 +133,7 @@ class BookingSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(f'"{tier.name}" tickets are not on sale yet.')
             if state == 'ended':
                 raise serializers.ValidationError(f'Sales of "{tier.name}" tickets have closed.')
-            if quantity > tier.available:
+            if not tier.has_tickets_for(quantity):
                 raise serializers.ValidationError(f'Only {tier.available} "{tier.name}" tickets remain.')
             unit_price, is_sale = tier.price_at(now)
             if is_sale and tier.sale_remaining is not None and quantity > tier.sale_remaining:
@@ -144,7 +143,8 @@ class BookingSerializer(serializers.ModelSerializer):
                     f'Choose {tier.sale_remaining} or fewer.'
                 )
             tier_name = tier.name
-            tier.available -= quantity
+            if tier.is_limited:
+                tier.available -= quantity
             if is_sale:
                 tier.sale_sold += quantity
             tier.save(update_fields=['available', 'sale_sold'])
@@ -201,7 +201,7 @@ class BookingSerializer(serializers.ModelSerializer):
         )
 
         gathering.attendee_count += people
-        if gathering.attendee_count >= gathering.capacity:
+        if gathering.is_full:
             gathering.status = 'sold_out'
         gathering.save(update_fields=['attendee_count', 'status'])
         if total == 0:

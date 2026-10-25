@@ -247,7 +247,7 @@ def _publish_if_requested(gathering, fee):
     except PublishBlocked as exc:
         logger.info('Listing fee settled for %s but it cannot be published yet: %s', gathering.id, exc.message)
         return False
-    gathering.status = 'sold_out' if gathering.attendee_count >= gathering.capacity else 'published'
+    gathering.status = 'sold_out' if gathering.is_full else 'published'
     gathering.save(update_fields=['status'])
     return True
 

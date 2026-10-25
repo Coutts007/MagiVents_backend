@@ -48,7 +48,8 @@ class Gathering(models.Model):
     is_free = models.BooleanField(default=False)
     starting_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     currency = models.CharField(max_length=10, default='KES')
-    capacity = models.PositiveIntegerField(default=100)
+    # Places in total, or None for no limit
+    capacity = models.PositiveIntegerField(null=True, blank=True, default=None)
     attendee_count = models.PositiveIntegerField(default=0)
 
     # Editorial Artwork
@@ -80,6 +81,20 @@ class Gathering(models.Model):
         instance._loaded_status = instance.__dict__.get('status')
         instance._loaded_category = instance.__dict__.get('category')
         return instance
+
+    @property
+    def places_left(self):
+        """Places still free, or None when the event has no capacity limit."""
+        if self.capacity is None:
+            return None
+        return max(0, self.capacity - self.attendee_count)
+
+    @property
+    def is_full(self):
+        return self.capacity is not None and self.attendee_count >= self.capacity
+
+    def has_room_for(self, people):
+        return self.capacity is None or self.capacity - self.attendee_count >= people
 
     @property
     def is_public(self):
@@ -119,9 +134,9 @@ class TicketTier(models.Model):
     name = models.CharField(max_length=120)  # e.g. "VIP"
     price = models.DecimalField(max_digits=10, decimal_places=2)
     description = models.TextField(blank=True, default='')
-    # Total tickets of this type; `available` is what is left after bookings
-    quantity = models.PositiveIntegerField(default=50)
-    available = models.PositiveIntegerField(default=50)
+    # Total tickets of this type; `available` is what is left after bookings. Both are None for no limit.
+    quantity = models.PositiveIntegerField(null=True, blank=True, default=50)
+    available = models.PositiveIntegerField(null=True, blank=True, default=50)
     perks = models.JSONField(default=list, blank=True)
     order = models.PositiveIntegerField(default=0)
     # People one ticket admits
@@ -143,15 +158,29 @@ class TicketTier(models.Model):
         ordering = ['order', 'id']
 
     @property
+    def is_limited(self):
+        return self.quantity is not None
+
+    @property
     def sold(self):
-        return max(0, self.quantity - self.available)
+        if self.is_limited:
+            return max(0, self.quantity - self.available)
+        # No limit, so nothing counts down: count the bookings holding tickets (annotated by event querysets)
+        held = getattr(self, 'tickets_held', None)
+        if held is None:
+            held = self.bookings.filter(holds_tickets=True).aggregate(n=models.Sum('quantity'))['n']
+        return int(held or 0)
+
+    def has_tickets_for(self, quantity):
+        return not self.is_limited or self.available >= quantity
 
     @property
     def sale_remaining(self):
         """Tickets still available at the sale price, or None when the sale has no limit."""
         if self.sale_quantity is None:
             return None
-        return max(0, min(self.sale_quantity - self.sale_sold, self.available))
+        left = self.sale_quantity - self.sale_sold
+        return max(0, left if self.available is None else min(left, self.available))
 
     def sale_active(self, now=None):
         now = now or timezone.now()
@@ -178,6 +207,18 @@ class TicketTier(models.Model):
 
     def __str__(self):
         return f"{self.name} - {self.gathering.title}"
+
+
+def tiers_with_tickets_held():
+    """Ticket types with `tickets_held` filled in for the ones without a limit (the others count down instead),
+    so listing events does not ask the database once per ticket type."""
+    from tickets.models import Booking
+    held = (Booking.objects.filter(tier=models.OuterRef('pk'), holds_tickets=True).order_by()
+            .values('tier').annotate(n=models.Sum('quantity')).values('n'))
+    return TicketTier.objects.annotate(tickets_held=models.Case(
+        models.When(quantity__isnull=True, then=models.Subquery(held)), default=None,
+        output_field=models.PositiveIntegerField(),
+    ))
 
 
 class AgendaItem(models.Model):
