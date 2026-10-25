@@ -321,6 +321,40 @@ class DarajaStkTests(LifecycleBase):
         with mock.patch('payments.providers.daraja.requests.post', return_value=fake_response(cancelled)):
             self.assertEqual(self.status(res.data['id']).data['status'], 'failed')
 
+    def query_after(self, booking_id, seconds, result):
+        Payment.objects.filter(booking_id=booking_id).update(
+            last_queried_at=None, created_at=timezone.now() - timedelta(seconds=seconds))
+        body = {'ResponseCode': '0', 'CheckoutRequestID': 'ws_CO_123', **result}
+        with mock.patch('payments.providers.daraja.requests.post', return_value=fake_response(body)):
+            return self.status(booking_id).data
+
+    def test_unfinished_answers_from_the_status_check_stay_pending(self):
+        res, _, _ = self.start()
+        # Safaricom says these while the attendee is still entering the PIN
+        for code, desc in (('4999', 'The transaction is still under processing'), ('1037', 'No response from user.')):
+            data = self.query_after(res.data['id'], 30, {'ResultCode': code, 'ResultDesc': desc})
+            self.assertEqual(data['status'], 'pending', code)
+        # Once the prompt can no longer be answered, "no response" is a failure
+        data = self.query_after(res.data['id'], 95, {'ResultCode': '1037', 'ResultDesc': 'No response from user.'})
+        self.assertEqual(data['status'], 'failed')
+
+    def test_late_success_after_a_failure_still_gives_the_ticket(self):
+        res, _, _ = self.start()
+        self.query_after(res.data['id'], 95, {'ResultCode': '1037', 'ResultDesc': 'No response from user.'})
+        ok = self.callback(self.stk_body(amount=res.data['totalPrice']))
+        self.assertEqual(ok.status_code, 200)
+        booking = Booking.objects.get(id=res.data['id'])
+        self.assertEqual(booking.status, 'confirmed')
+        self.assertTrue(booking.ticket_code)
+
+    def test_expired_booking_keeps_asking_about_an_unanswered_payment(self):
+        res, _, _ = self.start()
+        Booking.objects.filter(id=res.data['id']).update(expires_at=timezone.now() - timedelta(seconds=1))
+        call_command('release_expired_holds', verbosity=0)
+        self.assertEqual(Booking.objects.get(id=res.data['id']).status, 'expired')
+        data = self.query_after(res.data['id'], 130, {'ResultCode': '0', 'ResultDesc': 'Processed successfully.'})
+        self.assertEqual(data['status'], 'confirmed')
+
     def test_query_fallback_when_callback_never_arrives(self):
         res, _, _ = self.start()
         Payment.objects.filter(booking_id=res.data['id']).update(

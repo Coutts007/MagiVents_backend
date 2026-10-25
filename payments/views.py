@@ -24,12 +24,14 @@ class BookingStatusView(APIView):
         booking = get_booking(booking_id)
         if booking is None:
             return Response({'error': 'Booking not found.'}, status=status.HTTP_404_NOT_FOUND)
-        if booking.status == 'pending':
+        if booking.status in ('pending', 'expired'):
             payment = booking.payments.filter(status='pending').order_by('-created_at').first()
             if payment:
-                # Fallback for callbacks that are slow or never arrive
+                # Fallback for callbacks that are slow or never arrive. An expired booking whose payment never got
+                # an answer keeps asking: a late success confirms it if the tickets are still available
                 refresh_payment(payment)
-            release_expired_holds(booking.gathering_id)
+            if booking.status == 'pending':
+                release_expired_holds(booking.gathering_id)
             booking.refresh_from_db()
         return Response(booking_status_payload(booking, request))
 

@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 import requests
 from django.conf import settings
 from django.core.cache import cache
+from django.utils import timezone
 
 from ..services import PaymentError
 from .base import PaymentProvider, QueryResult
@@ -43,6 +44,16 @@ STK_RESULT_MESSAGES = {
     2001: 'The M-Pesa PIN was wrong.',
     1019: 'The M-Pesa request expired.',
 }
+
+# Answers that end a prompt for certain: the attendee (or their account) answered it. Anything else from the status
+# check, such as 4999 "still under processing" or 1037 "no response", only counts once the prompt has timed out.
+STK_FINAL_RESULT_CODES = {1, 1032, 2001}
+# How long a prompt can stay open on the phone, with a margin
+STK_PROMPT_SECONDS = 90
+
+
+def payment_age(payment):
+    return (timezone.now() - payment.created_at).total_seconds()
 
 
 def base_url():
@@ -157,6 +168,10 @@ class DarajaStkProvider(PaymentProvider):
             # The query has no amount or receipt; an STK prompt can only charge the amount we requested
             return QueryResult('succeeded', amount=payment.amount, provider_reference=payment.provider_reference,
                                raw=data)
+        if code not in STK_FINAL_RESULT_CODES and payment_age(payment) < STK_PROMPT_SECONDS:
+            # "Still processing" or "no response" while the prompt can still be answered: the status check says
+            # this before the attendee has finished entering the PIN, so only the callback or a later check decides
+            return QueryResult('pending', raw=data)
         # Unknown codes get the generic message; Safaricom's own text stays in the raw payload for staff
         return QueryResult('failed', reason=STK_RESULT_MESSAGES.get(code, ''), raw=data)
 
