@@ -10,7 +10,8 @@ import os
 
 wsgi_app = 'config.wsgi:application'
 worker_class = 'gthread'
-bind = os.environ.get('GUNICORN_BIND', '0.0.0.0:8000')
+# PORT is set by hosts such as Render; GUNICORN_BIND overrides both
+bind = os.environ.get('GUNICORN_BIND') or f"0.0.0.0:{os.environ.get('PORT', '8000')}"
 workers = int(os.environ.get('WEB_CONCURRENCY') or multiprocessing.cpu_count() + 1)
 # Requests a process works on at once; a request waiting on the database or a payment provider frees the CPU
 threads = int(os.environ.get('GUNICORN_THREADS', '4'))

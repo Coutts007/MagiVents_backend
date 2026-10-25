@@ -10,7 +10,8 @@ import os
 
 wsgi_app = 'config.asgi:application'
 worker_class = 'uvicorn_worker.UvicornWorker'
-bind = os.environ.get('GUNICORN_BIND', '0.0.0.0:8000')
+# PORT is set by hosts such as Render; GUNICORN_BIND overrides both
+bind = os.environ.get('GUNICORN_BIND') or f"0.0.0.0:{os.environ.get('PORT', '8000')}"
 # One process per CPU core: the work is mostly waiting, and each process serves many answers at once
 workers = int(os.environ.get('WEB_CONCURRENCY') or max(2, multiprocessing.cpu_count()))
 backlog = int(os.environ.get('GUNICORN_BACKLOG', '4096'))

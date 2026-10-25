@@ -42,6 +42,11 @@ if not DEBUG and SECRET_KEY in (DEV_SECRET_KEY, '', 'change-me'):
 ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost,0.0.0.0').split(',')
 # Origins allowed to POST forms to Django itself (admin, password reset pages), e.g. https://api.example.co.ke
 CSRF_TRUSTED_ORIGINS = [o for o in os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(',') if o]
+# On Render, the service's own onrender.com hostname (set by the platform) is always allowed
+RENDER_EXTERNAL_HOSTNAME = os.environ.get('RENDER_EXTERNAL_HOSTNAME', '')
+if RENDER_EXTERNAL_HOSTNAME:
+    ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
+    CSRF_TRUSTED_ORIGINS.append(f'https://{RENDER_EXTERNAL_HOSTNAME}')
 
 if not DEBUG:
     # HTTPS everywhere. The proxy in front of Django (nginx, a load balancer, a PaaS router) terminates TLS
@@ -175,7 +180,8 @@ BOOKING_EMAILS_IN_BACKGROUND = os.environ.get('BOOKING_EMAILS_IN_BACKGROUND', 'F
 # Seconds the simulated gateway takes to "complete" a payment (0 confirms at once)
 PAYMENTS_SIMULATED_DELAY_SECONDS = int(os.environ.get('PAYMENTS_SIMULATED_DELAY_SECONDS', '6'))
 # Public HTTPS address of this API, used to build the callback URLs given to Daraja and Paystack
-PUBLIC_API_URL = os.environ.get('PUBLIC_API_URL', 'http://localhost:8000')
+PUBLIC_API_URL = os.environ.get('PUBLIC_API_URL') or (
+    f'https://{RENDER_EXTERNAL_HOSTNAME}' if RENDER_EXTERNAL_HOSTNAME else 'http://localhost:8000')
 # Unguessable path segment for callbacks that providers do not sign (Daraja)
 PAYMENT_CALLBACK_SECRET = os.environ.get('PAYMENT_CALLBACK_SECRET', '')
 

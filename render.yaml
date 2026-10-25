@@ -1,0 +1,125 @@
+# Render Blueprint for the MagiVents API: the Django API (Docker), PostgreSQL and Key Value (Redis-compatible).
+# Spec: https://render.com/docs/blueprint-spec
+#
+# Deploy: push this file to GitHub, then in the Render Dashboard choose New > Blueprint and pick this repo.
+# Render asks once for every `sync: false` value below (secrets are never stored in this file). Later changes
+# to those values are made in the Dashboard (service > Environment), not here.
+#
+# Frankfurt is the closest Render region to Kenya. A region cannot be changed after creation.
+
+services:
+  - type: web
+    name: magivents-api
+    runtime: docker
+    region: frankfurt
+    plan: 0.5c-512mb
+    # Migrations run before each new version starts serving
+    preDeployCommand: python manage.py migrate --noinput
+    healthCheckPath: /api/health/
+    autoDeployTrigger: commit
+    envVars:
+      # --- Django -----------------------------------------------------------------------------------------
+      - key: DJANGO_DEBUG
+        value: "False"
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      # The onrender.com hostname is added automatically (config/settings.py); list custom domains here
+      - key: DJANGO_ALLOWED_HOSTS
+        value: localhost
+      # Render terminates HTTPS and sets X-Forwarded-For / X-Forwarded-Proto
+      - key: BEHIND_PROXY
+        value: "True"
+      # Address of the frontend, e.g. https://magivents.co.ke (used in emails and for CORS)
+      - key: FRONTEND_URL
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+
+      # --- Database and cache -----------------------------------------------------------------------------
+      - key: POSTGRES_HOST
+        fromDatabase:
+          name: magivents-db
+          property: host
+      - key: POSTGRES_PORT
+        fromDatabase:
+          name: magivents-db
+          property: port
+      - key: POSTGRES_DB
+        fromDatabase:
+          name: magivents-db
+          property: database
+      - key: POSTGRES_USER
+        fromDatabase:
+          name: magivents-db
+          property: user
+      - key: POSTGRES_PASSWORD
+        fromDatabase:
+          name: magivents-db
+          property: password
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: magivents-cache
+          property: connectionString
+
+      # --- Payments (M-Pesa Daraja sandbox) -----------------------------------------------------------------
+      # For real money: MPESA_ENVIRONMENT=production, your own shortcodes and passkey, and DARAJA_ALLOWED_IPS
+      - key: PAYMENTS_MODE
+        value: live
+      - key: PAYMENT_HOLD_MINUTES
+        value: "2"
+      - key: MPESA_ENVIRONMENT
+        value: sandbox
+      - key: MPESA_STK_SHORTCODE
+        value: "174379"
+      - key: MPESA_C2B_SHORTCODE
+        value: "600984"
+      - key: MPESA_CONSUMER_KEY
+        sync: false
+      - key: MPESA_CONSUMER_SECRET
+        sync: false
+      - key: MPESA_PASSKEY
+        sync: false
+      # Must be URL-safe (it is part of the callback paths), so it is not generated here:
+      #   python -c "import secrets; print(secrets.token_urlsafe(32))"
+      - key: PAYMENT_CALLBACK_SECRET
+        sync: false
+      # PUBLIC_API_URL defaults to https://<this service>.onrender.com; set it when using a custom domain
+
+      # --- Email (Gmail SMTP with an app password) ----------------------------------------------------------
+      - key: EMAIL_BACKEND
+        value: django.core.mail.backends.smtp.EmailBackend
+      - key: EMAIL_HOST
+        value: smtp.gmail.com
+      - key: EMAIL_PORT
+        value: "587"
+      - key: EMAIL_USE_TLS
+        value: "True"
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+      - key: DEFAULT_FROM_EMAIL
+        value: MagiVents <magiventskenya@gmail.com>
+
+      # Optional, added in the Dashboard when needed (Render keeps variables that are not in this file):
+      #   AI_API_KEY, GOOGLE_OAUTH_CLIENT_ID, ADMIN_CONSOLE_PATH, PAYSTACK_SECRET_KEY, and for uploaded posters
+      #   and avatars an S3-compatible bucket: AWS_STORAGE_BUCKET_NAME, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+      #   AWS_S3_ENDPOINT_URL, AWS_S3_REGION_NAME, AWS_S3_CUSTOM_DOMAIN
+
+  - type: keyvalue
+    name: magivents-cache
+    region: frankfurt
+    # Cache, rate limits and the shared M-Pesa access token; nothing here needs to survive a restart
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+    # Reachable only from services in this workspace
+    ipAllowList: []
+
+databases:
+  - name: magivents-db
+    region: frankfurt
+    plan: 0.1c-256mb
+    databaseName: magivents_db
+    user: magivents_user
+    postgresMajorVersion: "15"
