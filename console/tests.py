@@ -55,7 +55,9 @@ class AccessTests(ConsoleTestCase):
             self.client.force_authenticate(user)
             res = self.client.get(url)
             self.assertEqual(res.status_code, 404, (user, url))
-            self.assertEqual(res.data, {'detail': 'Not found.'})
+            # The same answer as any other missing page, whoever asks
+            self.assertEqual(res.data, {'error': 'We could not find what you were looking for. It may have been removed.',
+                                        'code': 'not_found'})
 
     def test_inactive_staff_are_refused(self):
         self.staff.is_active = False

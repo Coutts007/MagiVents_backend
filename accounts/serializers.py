@@ -58,7 +58,8 @@ class RegisterSerializer(serializers.Serializer):
     def validate_email(self, value):
         value = value.strip().lower()
         if User.objects.filter(email__iexact=value).exists():
-            raise serializers.ValidationError('An account with this email already exists. Please sign in instead.')
+            raise serializers.ValidationError('An account with this email already exists. Sign in instead, or reset '
+                                              'your password if you have forgotten it.')
         return value
 
     def validate(self, attrs):
@@ -83,6 +84,8 @@ class LoginSerializer(serializers.Serializer):
 
 class GoogleAuthSerializer(serializers.Serializer):
     credential = serializers.CharField(help_text='Google ID token (JWT) from Google Identity Services')
+    # signin: only an existing account may sign in; signup: a new account is created when there is none
+    intent = serializers.ChoiceField(choices=['signin', 'signup'], default='signin', required=False)
 
 
 class PasswordChangeSerializer(serializers.Serializer):

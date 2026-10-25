@@ -121,7 +121,7 @@ REST_FRAMEWORK = {
     ),
     # Frontend expects prices as numbers, not strings
     'COERCE_DECIMAL_TO_STRING': False,
-    # Unexpected errors reach users as "Server error." only; the details go to the log
+    # Unexpected errors reach users as a short, generic message only; the details go to the log
     'EXCEPTION_HANDLER': 'core.exceptions.api_exception_handler',
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_THROTTLE_RATES': {

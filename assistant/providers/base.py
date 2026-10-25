@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 
 # What organizers see for any failure on the server's side; details go to the server log only
-SERVER_ERROR = 'Server error.'
+SERVER_ERROR = 'Something went wrong on our side. Please try again in a moment.'
 
 
 class AssistantError(Exception):

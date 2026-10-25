@@ -1,6 +1,9 @@
+import logging
+
 from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.forms import PasswordResetForm
+from google.auth.exceptions import TransportError
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 from drf_spectacular.types import OpenApiTypes
@@ -20,6 +23,13 @@ from .serializers import (
     RegisterSerializer,
     UserProfileSerializer,
 )
+
+logger = logging.getLogger(__name__)
+
+GOOGLE_UNAVAILABLE = 'Google sign-in is not available right now. Please use your email and password.'
+GOOGLE_UNREACHABLE = ('We could not reach Google just now. Please try again in a moment, or use your email '
+                      'and password.')
+GOOGLE_NOT_CONFIRMED = 'Google sign-in could not be confirmed. Please try again.'
 
 
 def get_tokens_for_user(user):
@@ -63,7 +73,9 @@ class LoginView(APIView):
             password=serializer.validated_data['password'],
         )
         if user is None:
-            return Response({'error': 'Incorrect email or password.'}, status=status.HTTP_401_UNAUTHORIZED)
+            # Never says which of the two was wrong, or whether the email has an account
+            return Response({'error': 'Incorrect email or password. If you signed up with Google, use '
+                                      '"Sign in with Google" instead.'}, status=status.HTTP_401_UNAUTHORIZED)
         return auth_response(request, user)
 
 
@@ -76,11 +88,9 @@ class GoogleAuthView(APIView):
         serializer.is_valid(raise_exception=True)
 
         if not settings.GOOGLE_OAUTH_CLIENT_ID:
-            return Response(
-                # The missing setting is for the server log, not for users
-                {'error': 'Server error.'},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
+            # The missing setting is for the server log, not for users
+            logger.error('Google sign-in was attempted but GOOGLE_OAUTH_CLIENT_ID is not set')
+            return Response({'error': GOOGLE_UNAVAILABLE}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         try:
             id_info = id_token.verify_oauth2_token(
@@ -88,18 +98,29 @@ class GoogleAuthView(APIView):
                 google_requests.Request(),
                 settings.GOOGLE_OAUTH_CLIENT_ID,
             )
+        except TransportError:
+            logger.warning('Could not reach Google to check a sign-in', exc_info=True)
+            return Response({'error': GOOGLE_UNREACHABLE}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except ValueError:
-            return Response({'error': 'Invalid Google token signature.'}, status=status.HTTP_400_BAD_REQUEST)
+            # Expired, tampered with or issued for another app: which one is not the user's concern
+            return Response({'error': GOOGLE_NOT_CONFIRMED}, status=status.HTTP_400_BAD_REQUEST)
 
         email = (id_info.get('email') or '').lower()
         if not email or not id_info.get('email_verified'):
-            return Response({'error': 'Your Google account email is not verified.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Your Google account\'s email address is not verified. Verify it with Google, '
+                                      'or sign up with your email and a password.'}, status=status.HTTP_400_BAD_REQUEST)
 
         name = (id_info.get('name') or email.split('@')[0])[:150]
         avatar_url = id_info.get('picture') or None
         google_sub = id_info.get('sub')
 
         user = User.objects.filter(email__iexact=email).first()
+        if not user and serializer.validated_data['intent'] == 'signin':
+            # Safe to say: Google has just proved this person owns the email, so nothing is revealed to a stranger
+            return Response({
+                'error': f'There is no MagiVents account for {email} yet. Sign up to create one.',
+                'code': 'account_not_found',
+            }, status=status.HTTP_404_NOT_FOUND)
         if not user:
             user = User(
                 username=email,

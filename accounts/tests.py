@@ -82,7 +82,7 @@ class GoogleAuthTests(APITestCase):
     @mock.patch('accounts.views.id_token.verify_oauth2_token')
     def test_creates_user_from_verified_token(self, verify):
         verify.return_value = {'email': 'g@example.com', 'email_verified': True, 'name': 'G User', 'sub': '123', 'picture': 'https://x/y.png'}
-        res = self.client.post('/api/auth/google/', {'credential': 'valid'}, format='json')
+        res = self.client.post('/api/auth/google/', {'credential': 'valid', 'intent': 'signup'}, format='json')
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data['user']['authProvider'], 'google')
         self.assertEqual(res.data['user']['avatarUrl'], 'https://x/y.png')
@@ -92,6 +92,67 @@ class GoogleAuthTests(APITestCase):
     def test_unconfigured_server(self):
         res = self.client.post('/api/auth/google/', {'credential': 'anything'}, format='json')
         self.assertEqual(res.status_code, 503)
+        self.assertIn('email and password', res.data['error'])
+        self.assertNotIn('GOOGLE', res.data['error'])
+
+    @mock.patch('accounts.views.id_token.verify_oauth2_token')
+    def test_sign_in_with_google_without_an_account_says_to_sign_up(self, verify):
+        verify.return_value = {'email': 'New@example.com', 'email_verified': True, 'name': 'New', 'sub': '9'}
+        res = self.client.post('/api/auth/google/', {'credential': 'valid', 'intent': 'signin'}, format='json')
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.data['code'], 'account_not_found')
+        self.assertIn('new@example.com', res.data['error'])
+        self.assertIn('Sign up', res.data['error'])
+        self.assertFalse(User.objects.exists())
+        # Signing up with the same Google account then works, and signing in afterwards too
+        self.assertEqual(self.client.post('/api/auth/google/', {'credential': 'valid', 'intent': 'signup'},
+                                          format='json').status_code, 200)
+        self.assertEqual(self.client.post('/api/auth/google/', {'credential': 'valid'}, format='json').status_code, 200)
+
+    @mock.patch('accounts.views.id_token.verify_oauth2_token')
+    def test_google_sign_in_reaches_an_account_made_with_a_password(self, verify):
+        User.objects.create_user(username='p@example.com', email='p@example.com', password='pw-User-123')
+        verify.return_value = {'email': 'p@example.com', 'email_verified': True, 'name': 'P', 'sub': '7'}
+        res = self.client.post('/api/auth/google/', {'credential': 'valid', 'intent': 'signin'}, format='json')
+        self.assertEqual(res.status_code, 200)
+
+    def test_google_errors_never_show_technical_details(self):
+        from google.auth.exceptions import TransportError
+        with mock.patch('accounts.views.id_token.verify_oauth2_token', side_effect=ValueError('Token used too late')):
+            res = self.client.post('/api/auth/google/', {'credential': 'old'}, format='json')
+        self.assertEqual(res.data['error'], 'Google sign-in could not be confirmed. Please try again.')
+        with mock.patch('accounts.views.id_token.verify_oauth2_token', side_effect=TransportError('unreachable')):
+            res = self.client.post('/api/auth/google/', {'credential': 'x'}, format='json')
+        self.assertEqual(res.status_code, 503)
+        self.assertIn('could not reach Google', res.data['error'])
+
+
+class FriendlyErrorTests(APITestCase):
+    def test_signed_out_and_bad_session_messages(self):
+        res = self.client.get('/api/auth/profile/')
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.data['error'], 'Please sign in to continue.')
+        self.client.credentials(HTTP_AUTHORIZATION='Bearer not-a-real-token')
+        res = self.client.get('/api/auth/profile/')
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.data['error'], 'Your session has ended. Please sign in again.')
+        self.assertNotIn('token', str(res.data).lower())
+
+    def test_wrong_password_message_does_not_say_which_part_was_wrong(self):
+        res = self.client.post('/api/auth/login/', {'email': 'nobody@example.com', 'password': 'x'}, format='json')
+        self.assertEqual(res.status_code, 401)
+        self.assertTrue(res.data['error'].startswith('Incorrect email or password.'))
+
+    def test_unreadable_request_body(self):
+        res = self.client.post('/api/auth/login/', '{not json', content_type='application/json')
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.data['error'], 'The information sent could not be read. Please try again.')
+
+    def test_wait_phrase(self):
+        from core.exceptions import wait_phrase
+        self.assertEqual(wait_phrase(1), '1 second')
+        self.assertEqual(wait_phrase(37.2), '38 seconds')
+        self.assertEqual(wait_phrase(61), '2 minutes')
 
 
 class RoleTests(APITestCase):
@@ -165,6 +226,7 @@ class SignInThrottleTests(APITestCase):
                 self.assertEqual(res.status_code, 401)
             res = self.client.post('/api/auth/login/', {'email': 'T@x.com ', 'password': 'pw-Right-123'}, format='json')
             self.assertEqual(res.status_code, 429)
+            self.assertRegex(res.data['error'], r'^Too many attempts\. Please wait \d+ seconds? and try again\.$')
             # Other accounts are unaffected
             res = self.client.post('/api/auth/login/', {'email': 'other@x.com', 'password': 'x'}, format='json')
             self.assertEqual(res.status_code, 401)

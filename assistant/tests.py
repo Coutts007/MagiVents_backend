@@ -148,7 +148,7 @@ class MockProviderTests(AssistantTestCase):
         self.client.force_authenticate(None)
         res = self.client.post(URL, {'action': 'tags'}, format='json', HTTP_ACCEPT='text/event-stream')
         self.assertEqual(res.status_code, 401)
-        self.assertIn('detail', json.loads(res.content))
+        self.assertIn('error', json.loads(res.content))
 
     def test_every_quick_action_returns_valid_suggestions(self):
         for action, field in [('description', 'description'), ('agenda', 'agenda'), ('tagline', 'tagline'),
@@ -216,7 +216,7 @@ class ProviderFailureTests(AssistantTestCase):
             events = events_of(res)
         self.assertEqual(len(provider.requests), 2)
         self.assertIn('reset', [e for e, _ in events])
-        self.assertEqual(events[-1], ('error', {'error': 'Server error.', 'code': 'bad_output', 'retryable': True}))
+        self.assertEqual(events[-1], ('error', {'error': 'Something went wrong on our side. Please try again in a moment.', 'code': 'bad_output', 'retryable': True}))
 
     def test_retry_recovers(self):
         provider = ScriptedProvider('{"reply": 12}', answer('Fixed', [suggestion('title', text='Karura Run')]))
@@ -374,19 +374,20 @@ class ShortErrorMessagesTests(AssistantTestCase):
         for code in ('provider_auth', 'provider_unavailable', 'timeout'):
             with self.use(ScriptedProvider(AssistantError(__import__('assistant.providers', fromlist=['SERVER_ERROR']).SERVER_ERROR, code))):
                 res = self.ask(action='titles')
-            self.assertEqual(res.data['error'], 'Server error.')
+            self.assertEqual(res.data['error'], 'Something went wrong on our side. Please try again in a moment.')
 
     def test_unexpected_errors_are_json_without_details(self):
         with mock.patch('assistant.views.prepare_turn', side_effect=RuntimeError('database password is hunter2')), \
                 self.assertLogs('django.request', 'ERROR'):
             res = self.ask(action='titles')
-        self.assertEqual((res.status_code, res.json()), (500, {'error': 'Server error.'}))
+        self.assertEqual((res.status_code, res.json()), (500, {'error': 'Something went wrong on our side. Please try again in a moment.'}))
 
     @override_settings(GOOGLE_OAUTH_CLIENT_ID='')
     def test_configuration_is_not_revealed(self):
         self.client.force_authenticate(None)
         res = self.client.post('/api/auth/google/', {'credential': 'x'}, format='json')
-        self.assertEqual((res.status_code, res.data['error']), (503, 'Server error.'))
+        self.assertEqual(res.status_code, 503)
+        self.assertEqual(res.data['error'], 'Google sign-in is not available right now. Please use your email and password.')
 
 
 class CapacityTests(AssistantTestCase):
@@ -419,10 +420,10 @@ class CapacityTests(AssistantTestCase):
     async def test_asgi_checks_still_come_first_and_provider_errors_are_events(self):
         response, _ = await self.asgi_ask(self.organizer, action='chat')
         self.assertEqual((response.status_code, json.loads(response.content)['code']), (400, 'empty_message'))
-        with self.use(ScriptedProvider(AssistantError('Server error.', 'provider_unavailable'))):
+        with self.use(ScriptedProvider(AssistantError('Something went wrong on our side. Please try again in a moment.', 'provider_unavailable'))):
             response, events = await self.asgi_ask(self.organizer, action='titles')
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(events, [('error', {'error': 'Server error.', 'code': 'provider_unavailable',
+        self.assertEqual(events, [('error', {'error': 'Something went wrong on our side. Please try again in a moment.', 'code': 'provider_unavailable',
                                              'retryable': True})])
 
     def test_many_answers_stream_at_once_on_one_loop(self):
