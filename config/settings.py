@@ -159,7 +159,7 @@ PAYMENTS_MODE = os.environ.get('PAYMENTS_MODE', 'simulated')
 if PAYMENTS_MODE not in ('simulated', 'live'):
     raise ImproperlyConfigured("PAYMENTS_MODE must be 'simulated' or 'live'.")
 # How long a pending booking holds its tickets
-PAYMENT_HOLD_MINUTES = int(os.environ.get('PAYMENT_HOLD_MINUTES', '10'))
+PAYMENT_HOLD_MINUTES = int(os.environ.get('PAYMENT_HOLD_MINUTES', '2'))
 # Event pages give back expired holds at most this often (bookings always do it first)
 HOLDS_SWEEP_SECONDS = int(os.environ.get('HOLDS_SWEEP_SECONDS', '15'))
 

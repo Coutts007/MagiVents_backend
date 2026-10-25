@@ -5,6 +5,7 @@ from datetime import timedelta
 from decimal import Decimal
 from unittest import mock
 
+from django.conf import settings
 from django.core import mail
 from django.core.cache import cache
 from django.core.management import call_command
@@ -66,7 +67,7 @@ class SimulatedLifecycleTests(LifecycleBase):
         self.assertIsNone(res.data['ticketCode'])
         self.assertIsNone(res.data['ticketUrl'])
         self.assertEqual(res.data['payment']['status'], 'pending')
-        self.assertGreater(res.data['holdSecondsLeft'], 500)
+        self.assertGreater(res.data['holdSecondsLeft'], settings.PAYMENT_HOLD_MINUTES * 60 - 10)
         # Tickets are held while the payment is pending
         self.assertEqual(self.counts(), (before[0] + 2, before[1] - 2))
         booking_id = res.data['id']
